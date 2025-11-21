@@ -45,6 +45,30 @@ class TableSchema(BaseModel):
 
     model_config = {"populate_by_name": True}
 
+class SlowQuery(BaseModel):
+    """One row from pg_stat_statements above the configured threshold."""
+
+    query: str = Field(description="Normalized SQL — parameters replaced with placeholders.")
+    calls: int
+    total_exec_time_ms: float
+    mean_exec_time_ms: float
+    rows: int
+    shared_blks_hit: int
+    shared_blks_read: int
+
+
+class VacuumStatus(BaseModel):
+    schema_: str = Field(alias="schema")
+    name: str
+    last_vacuum: str | None
+    last_autovacuum: str | None
+    last_analyze: str | None
+    last_autoanalyze: str | None
+    n_dead_tup: int
+    n_live_tup: int
+    autovacuum_vacuum_scale_factor: float | None
+
+    model_config = {"populate_by_name": True}
 
 class QueryResult(BaseModel):
     """Result envelope for `run_safe_query`."""

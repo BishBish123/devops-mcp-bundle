@@ -15,8 +15,10 @@ from devops_mcp_bundle.postgres.models import (
     DatabaseInfo,
     IndexInfo,
     QueryResult,
+    SlowQuery,
     TableInfo,
     TableSchema,
+    VacuumStatus,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -128,6 +130,78 @@ async def describe_table(conn: asyncpg.Connection, qualified: str) -> TableSchem
     ]
     return TableSchema(schema=schema, name=name, columns=columns, indexes=indexes)
 
+
+async def slow_queries(
+    conn: asyncpg.Connection, min_mean_ms: float = 100.0, limit: int = 20
+) -> list[SlowQuery]:
+    """Read pg_stat_statements. Returns [] if the extension is not installed."""
+    has_ext = await conn.fetchval("SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements'")
+    if not has_ext:
+        return []
+    rows = await conn.fetch(
+        """
+        SELECT query,
+               calls,
+               total_exec_time AS total_exec_time_ms,
+               mean_exec_time AS mean_exec_time_ms,
+               rows,
+               shared_blks_hit,
+               shared_blks_read
+        FROM pg_stat_statements
+        WHERE mean_exec_time >= $1
+        ORDER BY mean_exec_time DESC
+        LIMIT $2
+        """,
+        min_mean_ms,
+        limit,
+    )
+    return [
+        SlowQuery(
+            query=r["query"],
+            calls=int(r["calls"]),
+            total_exec_time_ms=float(r["total_exec_time_ms"]),
+            mean_exec_time_ms=float(r["mean_exec_time_ms"]),
+            rows=int(r["rows"]),
+            shared_blks_hit=int(r["shared_blks_hit"]),
+            shared_blks_read=int(r["shared_blks_read"]),
+        )
+        for r in rows
+    ]
+
+
+async def vacuum_status(conn: asyncpg.Connection, qualified: str) -> VacuumStatus:
+    if "." in qualified:
+        schema, name = qualified.split(".", 1)
+    else:
+        schema, name = "public", qualified
+
+    row = await conn.fetchrow(
+        """
+        SELECT last_vacuum::text,
+               last_autovacuum::text,
+               last_analyze::text,
+               last_autoanalyze::text,
+               n_dead_tup,
+               n_live_tup
+        FROM pg_stat_user_tables
+        WHERE schemaname = $1 AND relname = $2
+        """,
+        schema,
+        name,
+    )
+    if not row:
+        raise LookupError(f"no stats for {schema}.{name}")
+    return VacuumStatus(
+        schema=schema,
+        name=name,
+        last_vacuum=row["last_vacuum"],
+        last_autovacuum=row["last_autovacuum"],
+        last_analyze=row["last_analyze"],
+        last_autoanalyze=row["last_autoanalyze"],
+        n_dead_tup=int(row["n_dead_tup"] or 0),
+        n_live_tup=int(row["n_live_tup"] or 0),
+        autovacuum_vacuum_scale_factor=None,
+    )
 async def run_safe_query(
     conn: asyncpg.Connection, sql: str, timeout_ms: int = 5000, row_cap: int = 1000
 ) -> QueryResult:

@@ -19,9 +19,11 @@ from devops_mcp_bundle.postgres import queries
 from devops_mcp_bundle.postgres.models import (
     DatabaseInfo,
     QueryResult,
+    SlowQuery,
     StatementClass,
     TableInfo,
     TableSchema,
+    VacuumStatus,
 )
 from devops_mcp_bundle.postgres.safety import classify_sql
 
@@ -29,7 +31,8 @@ mcp: FastMCP = FastMCP(
     name="postgres-dba",
     instructions=(
         "Postgres DBA tools — read-only by default. Use list_databases / "
-        "list_tables / describe_table to discover schema, and "
+        "list_tables / describe_table to discover schema, slow_queries to "
+        "find performance hotspots from pg_stat_statements, and "
         "run_safe_query for ad-hoc SELECTs (parser-validated, server-side "
         "read-only enforced)."
     ),
@@ -47,11 +50,6 @@ def _dsn() -> str:
 
 @asynccontextmanager
 async def _connect() -> AsyncIterator[asyncpg.Connection]:
-    """Open one read-only connection per tool call (simple + safe).
-
-    Sets `default_transaction_read_only = on` so server-side will refuse
-    any write — second line of defence behind `is_read_only_sql`.
-    """
     conn = await asyncpg.connect(_dsn())
     try:
         await conn.execute("SET default_transaction_read_only = on")
@@ -83,12 +81,22 @@ async def describe_table(qualified_name: str) -> TableSchema:
 
 
 @mcp.tool
-def classify_statement(sql: str) -> StatementClass:
-    """Classify a SQL statement without executing it.
+async def slow_queries(min_mean_ms: float = 100.0, limit: int = 20) -> list[SlowQuery]:
+    """Top-N slow queries from pg_stat_statements (returns [] if extension missing)."""
+    async with _connect() as conn:
+        return await queries.slow_queries(conn, min_mean_ms=min_mean_ms, limit=limit)
 
-    Useful when an agent wants to *explain* to the user why a candidate
-    query is or isn't allowed before sending it to `run_safe_query`.
-    """
+
+@mcp.tool
+async def vacuum_status(qualified_name: str) -> VacuumStatus:
+    """When was a table last vacuumed/analyzed and how much dead-tuple buildup is there?"""
+    async with _connect() as conn:
+        return await queries.vacuum_status(conn, qualified_name)
+
+
+@mcp.tool
+def classify_statement(sql: str) -> StatementClass:
+    """Classify a SQL statement without executing it."""
     c = classify_sql(sql)
     return StatementClass(
         is_read_only=c.is_read_only, leading_keyword=c.leading_keyword, reason=c.reason
@@ -97,12 +105,7 @@ def classify_statement(sql: str) -> StatementClass:
 
 @mcp.tool
 async def run_safe_query(sql: str, timeout_ms: int = 5000, row_cap: int = 1000) -> QueryResult:
-    """Run a parser-validated, read-only SELECT.
-
-    Refuses anything that is not a single SELECT/EXPLAIN/SHOW/WITH/VALUES
-    statement before contacting the database. Server-side enforces
-    `default_transaction_read_only` as a second layer.
-    """
+    """Run a parser-validated, read-only SELECT."""
     classification = classify_sql(sql)
     if not classification.is_read_only:
         raise ValueError(f"SQL refused: {classification.reason}")
@@ -128,7 +131,7 @@ def run(
         raise typer.BadParameter(f"unknown transport {transport!r}")
 
 
-def main() -> None:  # pragma: no cover - thin wrapper
+def main() -> None:  # pragma: no cover
     _cli()
 
 
