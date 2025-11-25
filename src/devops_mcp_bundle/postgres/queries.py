@@ -11,6 +11,7 @@ import time
 from typing import TYPE_CHECKING
 
 from devops_mcp_bundle.postgres.models import (
+    ActivitySnapshot,
     ColumnInfo,
     DatabaseInfo,
     IndexInfo,
@@ -202,6 +203,61 @@ async def vacuum_status(conn: asyncpg.Connection, qualified: str) -> VacuumStatu
         n_live_tup=int(row["n_live_tup"] or 0),
         autovacuum_vacuum_scale_factor=None,
     )
+
+
+async def activity_snapshot(
+    conn: asyncpg.Connection, min_runtime_ms: float = 0.0, exclude_idle: bool = False
+) -> list[ActivitySnapshot]:
+    """Snapshot `pg_stat_activity` rows that are at least `min_runtime_ms` old.
+
+    Use to answer "what's the database doing right now?". Defaults are
+    permissive (returns idle sessions too) so the caller can decide how
+    to filter; the most common useful filter is
+    ``exclude_idle=True, min_runtime_ms=500`` for "what's stuck?".
+    """
+    if min_runtime_ms < 0:
+        raise ValueError("min_runtime_ms must be non-negative")
+
+    sql = """
+        SELECT pid,
+               datname,
+               usename,
+               application_name,
+               state,
+               wait_event_type,
+               wait_event,
+               backend_start::text,
+               xact_start::text,
+               query_start::text,
+               LEFT(query, 4096) AS query,
+               EXTRACT(EPOCH FROM (now() - COALESCE(query_start, now()))) * 1000.0
+                   AS runtime_ms
+        FROM pg_stat_activity
+        WHERE pid <> pg_backend_pid()
+    """
+    if exclude_idle:
+        sql += " AND state IS DISTINCT FROM 'idle'"
+    sql += " AND EXTRACT(EPOCH FROM (now() - COALESCE(query_start, now()))) * 1000.0 >= $1"
+    sql += " ORDER BY runtime_ms DESC"
+
+    rows = await conn.fetch(sql, min_runtime_ms)
+    return [
+        ActivitySnapshot(
+            pid=int(r["pid"]),
+            datname=r["datname"],
+            usename=r["usename"],
+            application_name=r["application_name"],
+            state=r["state"],
+            wait_event_type=r["wait_event_type"],
+            wait_event=r["wait_event"],
+            backend_start=r["backend_start"],
+            xact_start=r["xact_start"],
+            query_start=r["query_start"],
+            query=r["query"],
+            runtime_ms=float(r["runtime_ms"] or 0.0),
+        )
+        for r in rows
+    ]
 async def run_safe_query(
     conn: asyncpg.Connection, sql: str, timeout_ms: int = 5000, row_cap: int = 1000
 ) -> QueryResult:

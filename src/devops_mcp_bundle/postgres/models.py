@@ -70,6 +70,7 @@ class VacuumStatus(BaseModel):
 
     model_config = {"populate_by_name": True}
 
+
 class QueryResult(BaseModel):
     """Result envelope for `run_safe_query`."""
 
@@ -78,6 +79,25 @@ class QueryResult(BaseModel):
     row_count: int
     elapsed_ms: float
 
+class ActivitySnapshot(BaseModel):
+    """One row from `pg_stat_activity`, narrowed to the columns triage uses.
+
+    The full view has ~30 columns; we expose the subset that's actually
+    actionable when answering "what's the database doing right now?".
+    """
+
+    pid: int
+    datname: str | None
+    usename: str | None
+    application_name: str | None
+    state: str | None = Field(description="active | idle | idle in transaction | …")
+    wait_event_type: str | None
+    wait_event: str | None
+    backend_start: str | None
+    xact_start: str | None
+    query_start: str | None
+    query: str | None
+    runtime_ms: float = Field(description="now() - query_start, in milliseconds.")
 class StatementClass(BaseModel):
     """Classification result for a SQL statement.
 

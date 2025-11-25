@@ -18,6 +18,7 @@ from fastmcp import FastMCP
 from devops_mcp_bundle.postgres import queries
 from devops_mcp_bundle.postgres.models import (
     DatabaseInfo,
+    ActivitySnapshot,
     QueryResult,
     SlowQuery,
     StatementClass,
@@ -92,6 +93,17 @@ async def vacuum_status(qualified_name: str) -> VacuumStatus:
     """When was a table last vacuumed/analyzed and how much dead-tuple buildup is there?"""
     async with _connect() as conn:
         return await queries.vacuum_status(conn, qualified_name)
+
+
+@mcp.tool
+async def activity_snapshot(
+    min_runtime_ms: float = 0.0, exclude_idle: bool = False
+) -> list[ActivitySnapshot]:
+    """Return active queries from `pg_stat_activity` ordered by runtime."""
+    async with _connect() as conn:
+        return await queries.activity_snapshot(
+            conn, min_runtime_ms=min_runtime_ms, exclude_idle=exclude_idle
+        )
 
 
 @mcp.tool
