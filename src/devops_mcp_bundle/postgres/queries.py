@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from devops_mcp_bundle.postgres.models import (
     ActivitySnapshot,
+    BloatEstimate,
     ColumnInfo,
     DatabaseInfo,
     IndexInfo,
@@ -258,6 +259,69 @@ async def activity_snapshot(
         )
         for r in rows
     ]
+
+
+async def bloat_estimate(
+    conn: asyncpg.Connection, schema: str = "public", min_ratio: float = 0.0
+) -> list[BloatEstimate]:
+    """Estimate per-table bloat without `pgstattuple` (planner-stats only).
+
+    The classical "ioguix bloat query" approximates the on-disk size a
+    table *would* have if every row used its average width and the
+    fillfactor were honoured. The difference between that and the actual
+    `pg_class.relpages * 8 KB` is a bloat estimate. Quick and rough — use
+    `pgstattuple` for an exact number.
+    """
+    if min_ratio < 0:
+        raise ValueError("min_ratio must be non-negative")
+
+    rows = await conn.fetch(
+        """
+        WITH constants AS (SELECT current_setting('block_size')::numeric AS bs),
+        stats AS (
+            SELECT n.nspname AS schema,
+                   c.relname AS name,
+                   c.relpages::bigint AS relpages,
+                   c.reltuples,
+                   GREATEST(SUM(s.avg_width)::numeric, 0) AS row_width
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            LEFT JOIN pg_stats s
+                ON s.schemaname = n.nspname AND s.tablename = c.relname
+            WHERE c.relkind IN ('r', 'p') AND n.nspname = $1
+            GROUP BY n.nspname, c.relname, c.relpages, c.reltuples
+        )
+        SELECT schema,
+               name,
+               (relpages * (SELECT bs FROM constants))::bigint AS real_size_bytes,
+               GREATEST(
+                   (relpages * (SELECT bs FROM constants))
+                   - (reltuples * (row_width + 24) / NULLIF((SELECT bs FROM constants), 0))
+                       * (SELECT bs FROM constants),
+                   0
+               )::bigint AS bloat_size_bytes
+        FROM stats
+        ORDER BY bloat_size_bytes DESC
+        """,
+        schema,
+    )
+    out: list[BloatEstimate] = []
+    for r in rows:
+        real = int(r["real_size_bytes"] or 0)
+        bloat = int(r["bloat_size_bytes"] or 0)
+        ratio = (bloat / real) if real > 0 else 0.0
+        if ratio < min_ratio:
+            continue
+        out.append(
+            BloatEstimate(
+                schema=r["schema"],
+                name=r["name"],
+                real_size_bytes=real,
+                bloat_size_bytes=bloat,
+                bloat_ratio=ratio,
+            )
+        )
+    return out
 async def run_safe_query(
     conn: asyncpg.Connection, sql: str, timeout_ms: int = 5000, row_cap: int = 1000
 ) -> QueryResult:

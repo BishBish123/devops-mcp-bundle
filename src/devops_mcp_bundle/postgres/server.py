@@ -19,6 +19,7 @@ from devops_mcp_bundle.postgres import queries
 from devops_mcp_bundle.postgres.models import (
     DatabaseInfo,
     ActivitySnapshot,
+    BloatEstimate,
     QueryResult,
     SlowQuery,
     StatementClass,
@@ -105,6 +106,12 @@ async def activity_snapshot(
             conn, min_runtime_ms=min_runtime_ms, exclude_idle=exclude_idle
         )
 
+
+@mcp.tool
+async def bloat_estimate(schema: str = "public", min_ratio: float = 0.0) -> list[BloatEstimate]:
+    """Estimate dead-tuple bloat per table (planner-stats only, no extension)."""
+    async with _connect() as conn:
+        return await queries.bloat_estimate(conn, schema=schema, min_ratio=min_ratio)
 
 @mcp.tool
 def classify_statement(sql: str) -> StatementClass:

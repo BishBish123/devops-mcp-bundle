@@ -45,6 +45,7 @@ class TableSchema(BaseModel):
 
     model_config = {"populate_by_name": True}
 
+
 class SlowQuery(BaseModel):
     """One row from pg_stat_statements above the configured threshold."""
 
@@ -79,6 +80,7 @@ class QueryResult(BaseModel):
     row_count: int
     elapsed_ms: float
 
+
 class ActivitySnapshot(BaseModel):
     """One row from `pg_stat_activity`, narrowed to the columns triage uses.
 
@@ -98,6 +100,28 @@ class ActivitySnapshot(BaseModel):
     query_start: str | None
     query: str | None
     runtime_ms: float = Field(description="now() - query_start, in milliseconds.")
+
+
+class BloatEstimate(BaseModel):
+    """Rough table-bloat estimate.
+
+    Implementation note: we use the standard "ioguix" approximation that
+    only needs `pg_stats` + `pg_class` (no `pgstattuple` extension). The
+    numbers are *estimates*, not exact — the CTE assumes every row has
+    average column widths and that the fillfactor is 100. For an exact
+    count, callers should run `pgstattuple_approx()` on a small sample
+    in psql; this tool is a triage hint, not a measurement.
+    """
+
+    schema_: str = Field(alias="schema")
+    name: str
+    real_size_bytes: int = Field(description="On-disk size from pg_class.relpages.")
+    bloat_size_bytes: int = Field(description="Estimated dead/freespace bytes.")
+    bloat_ratio: float = Field(description="bloat_size / real_size, 0..1.")
+
+    model_config = {"populate_by_name": True}
+
+
 class StatementClass(BaseModel):
     """Classification result for a SQL statement.
 
