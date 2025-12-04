@@ -322,6 +322,27 @@ async def bloat_estimate(
             )
         )
     return out
+
+
+def kill_query(pid: int) -> str:
+    """Refuse to kill a backend.
+
+    Documents the safety contract: the Postgres MCP server never invokes
+    `pg_terminate_backend` or `pg_cancel_backend`. Both are valid SQL and
+    the connection user *might* have rights to call them, but the bundle
+    is read-only by construction. Returning a string is intentional — it
+    surfaces the refusal to the agent so it can render a kubectl-style
+    "to do this yourself, run …" message rather than failing silently.
+    """
+    if pid <= 0:
+        raise ValueError("pid must be positive")
+    return (
+        f"refused: this server is read-only. To cancel pid {pid} yourself, run "
+        f"`SELECT pg_cancel_backend({pid});` in psql; for a hard kill use "
+        f"`SELECT pg_terminate_backend({pid});`."
+    )
+
+
 async def run_safe_query(
     conn: asyncpg.Connection, sql: str, timeout_ms: int = 5000, row_cap: int = 1000
 ) -> QueryResult:

@@ -17,9 +17,9 @@ from fastmcp import FastMCP
 
 from devops_mcp_bundle.postgres import queries
 from devops_mcp_bundle.postgres.models import (
-    DatabaseInfo,
     ActivitySnapshot,
     BloatEstimate,
+    DatabaseInfo,
     QueryResult,
     SlowQuery,
     StatementClass,
@@ -52,6 +52,11 @@ def _dsn() -> str:
 
 @asynccontextmanager
 async def _connect() -> AsyncIterator[asyncpg.Connection]:
+    """Open one read-only connection per tool call (simple + safe).
+
+    Sets `default_transaction_read_only = on` so server-side will refuse
+    any write — second line of defence behind `is_read_only_sql`.
+    """
     conn = await asyncpg.connect(_dsn())
     try:
         await conn.execute("SET default_transaction_read_only = on")
@@ -59,6 +64,11 @@ async def _connect() -> AsyncIterator[asyncpg.Connection]:
         yield conn
     finally:
         await conn.close()
+
+
+# ---------------------------------------------------------------------------
+# MCP tool surface — every function below becomes a callable tool.
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool
@@ -113,9 +123,20 @@ async def bloat_estimate(schema: str = "public", min_ratio: float = 0.0) -> list
     async with _connect() as conn:
         return await queries.bloat_estimate(conn, schema=schema, min_ratio=min_ratio)
 
+
+@mcp.tool
+def kill_query(pid: int) -> str:
+    """Refuse a backend kill request — documents the read-only contract."""
+    return queries.kill_query(pid)
+
+
 @mcp.tool
 def classify_statement(sql: str) -> StatementClass:
-    """Classify a SQL statement without executing it."""
+    """Classify a SQL statement without executing it.
+
+    Useful when an agent wants to *explain* to the user why a candidate
+    query is or isn't allowed before sending it to `run_safe_query`.
+    """
     c = classify_sql(sql)
     return StatementClass(
         is_read_only=c.is_read_only, leading_keyword=c.leading_keyword, reason=c.reason
@@ -124,12 +145,22 @@ def classify_statement(sql: str) -> StatementClass:
 
 @mcp.tool
 async def run_safe_query(sql: str, timeout_ms: int = 5000, row_cap: int = 1000) -> QueryResult:
-    """Run a parser-validated, read-only SELECT."""
+    """Run a parser-validated, read-only SELECT.
+
+    Refuses anything that is not a single SELECT/EXPLAIN/SHOW/WITH/VALUES
+    statement before contacting the database. Server-side enforces
+    `default_transaction_read_only` as a second layer.
+    """
     classification = classify_sql(sql)
     if not classification.is_read_only:
         raise ValueError(f"SQL refused: {classification.reason}")
     async with _connect() as conn:
         return await queries.run_safe_query(conn, sql, timeout_ms=timeout_ms, row_cap=row_cap)
+
+
+# ---------------------------------------------------------------------------
+# CLI entry
+# ---------------------------------------------------------------------------
 
 
 _cli = typer.Typer(name="mcp-postgres-dba", add_completion=False)
@@ -150,7 +181,7 @@ def run(
         raise typer.BadParameter(f"unknown transport {transport!r}")
 
 
-def main() -> None:  # pragma: no cover
+def main() -> None:  # pragma: no cover - thin wrapper
     _cli()
 
 
