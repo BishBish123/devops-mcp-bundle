@@ -142,8 +142,33 @@ _SIDE_EFFECTING_FUNCTIONS: frozenset[str] = frozenset(
         # Large object mutators
         "lo_create",
         "lo_unlink",
+        # `lo_import` / `lo_export` read or write a file on the server's
+        # filesystem (with the OS uid Postgres runs as). Both require the
+        # `pg_read_server_files` / `pg_write_server_files` role — but
+        # superusers have it implicitly, and a misconfigured deployment
+        # can grant it to lower-privilege accounts. The local
+        # `default_transaction_read_only` flag does NOT cover them
+        # (`lo_import` is treated as read-only by Postgres' read-only
+        # txn check even though it touches the filesystem), so the
+        # parser is the only line of defence on a hardened cluster.
         "lo_import",
         "lo_export",
+        # Server-filesystem readers. These are technically read-only
+        # against the database, but they read arbitrary files on the
+        # Postgres host (limited only by the `pg_read_server_files`
+        # role), so they bypass the read-only contract by exfiltrating
+        # data the SQL connection has no business seeing —
+        # `pg_hba.conf`, `postgresql.conf`, `/etc/passwd` if the role is
+        # superuser. Treat them as side-effecting for the purposes of
+        # the safety classifier. Postgres function names match
+        # case-insensitively in the catalog; the `_normalize_identifier`
+        # helper above already lower-cases.
+        "pg_read_file",
+        "pg_read_binary_file",
+        "pg_ls_dir",
+        "pg_stat_file",
+        "pg_read_server_files",
+        "pg_logfile_rotate",
         # Sequence mutators
         "nextval",
         "setval",

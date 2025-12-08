@@ -306,3 +306,42 @@ class TestSideEffectingFunctionDenylist:
         # denylist must still parse as read-only. This guards against
         # an over-eager normalizer that would reject all quoted calls.
         assert is_read_only_sql('SELECT "my_helper"()')
+
+    @pytest.mark.parametrize(
+        "fn",
+        [
+            "pg_read_file",
+            "pg_read_binary_file",
+            "pg_ls_dir",
+            "pg_stat_file",
+            "pg_read_server_files",
+            "pg_logfile_rotate",
+            "lo_import",
+            "lo_export",
+        ],
+    )
+    def test_classifier_rejects_server_file_builtins(self, fn: str) -> None:
+        # A role with `pg_read_server_files` (or superuser) can call
+        # these from a SELECT and read arbitrary files on the Postgres
+        # host. The local `default_transaction_read_only` flag classes
+        # them as reads, so the parser is the only line of defence.
+        c = classify_sql(f"SELECT {fn}('arg')")
+        assert c.is_read_only is False, f"{fn} should be rejected"
+        assert fn in c.reason
+
+    @pytest.mark.parametrize(
+        "fn",
+        [
+            "PG_READ_FILE",
+            "Pg_Ls_Dir",
+            "PG_STAT_FILE",
+        ],
+    )
+    def test_classifier_rejects_server_file_builtins_case_insensitive(
+        self, fn: str
+    ) -> None:
+        # Postgres identifiers fold to lowercase; the denylist matcher
+        # must as well so `SELECT PG_READ_FILE(...)` doesn't bypass.
+        c = classify_sql(f"SELECT {fn}('arg')")
+        assert c.is_read_only is False
+        assert fn.lower() in c.reason
