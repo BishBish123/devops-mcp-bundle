@@ -15,8 +15,10 @@ import datetime as dt
 from typing import TYPE_CHECKING, Any, cast
 
 from devops_mcp_bundle.k8s.models import (
+    Event,
     LogLine,
     Namespace,
+    OOMKill,
     Pod,
     PodSpec,
 )
@@ -146,6 +148,24 @@ async def pod_logs(
     return out
 
 
+async def pod_events(api: CoreV1Api, namespace: str, name: str) -> list[Event]:
+    resp = await api.list_namespaced_event(
+        namespace=namespace,
+        field_selector=f"involvedObject.name={name}",
+    )
+    return [
+        Event(
+            type=e.type or "Normal",
+            reason=e.reason or "",
+            message=e.message or "",
+            count=int(e.count or 0),
+            last_seen=_ts_iso(e.last_timestamp or e.event_time),
+            involved_object=f"{e.involved_object.kind}/{e.involved_object.name}",
+        )
+        for e in resp.items
+    ]
+
+
 _MEMORY_UNITS: dict[str, int] = {
     "Ki": 1024,
     "Mi": 1024**2,
@@ -270,3 +290,31 @@ def redact_secrets_from_logs(line: str) -> str:
     return " ".join(out)
 
 
+async def recent_oomkills(api: CoreV1Api, namespace: str, since_min: int = 60) -> list[OOMKill]:
+    """Return Warning events whose reason contains 'OOMKill' within `since_min`."""
+    if since_min <= 0:
+        raise ValueError("since_min must be positive")
+    resp = await api.list_namespaced_event(namespace=namespace, field_selector="type=Warning")
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=since_min)
+    out: list[OOMKill] = []
+    for e in resp.items:
+        reason = (e.reason or "").lower()
+        if "oom" not in reason and "outofmemory" not in reason:
+            continue
+        when = e.last_timestamp or e.event_time
+        if when is None:
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=dt.UTC)
+        if when < cutoff:
+            continue
+        out.append(
+            OOMKill(
+                namespace=namespace,
+                pod=e.involved_object.name,
+                container=getattr(e.involved_object, "field_path", "") or "",
+                timestamp=_ts_iso(when) or "",
+                reason=e.reason or "OOMKilled",
+            )
+        )
+    return out

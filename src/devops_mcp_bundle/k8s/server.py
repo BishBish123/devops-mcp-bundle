@@ -21,8 +21,10 @@ from fastmcp import FastMCP
 
 from devops_mcp_bundle.k8s import queries
 from devops_mcp_bundle.k8s.models import (
+    Event,
     LogLine,
     Namespace,
+    OOMKill,
     Pod,
     PodSpec,
 )
@@ -88,7 +90,19 @@ async def pod_logs(
         return await queries.pod_logs(core, namespace, name, container, tail)  # type: ignore[arg-type]
 
 
+@mcp.tool
+async def pod_events(namespace: str, name: str) -> list[Event]:
+    """All events whose `involvedObject.name == name` in `namespace`."""
+    async with _api() as (core, _):
+        return await queries.pod_events(core, namespace, name)  # type: ignore[arg-type]
 
+
+
+@mcp.tool
+async def recent_oomkills(namespace: str, since_min: int = 60) -> list[OOMKill]:
+    """OOM-related Warning events from the last `since_min` minutes."""
+    async with _api() as (core, _):
+        return await queries.recent_oomkills(core, namespace, since_min)  # type: ignore[arg-type]
 
 
 

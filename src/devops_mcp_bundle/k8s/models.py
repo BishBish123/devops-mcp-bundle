@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Namespace(BaseModel):
@@ -35,3 +35,21 @@ class PodSpec(BaseModel):
 class LogLine(BaseModel):
     timestamp: str | None
     line: str
+
+
+
+class Event(BaseModel):
+    type: str = Field(description="Normal | Warning")
+    reason: str
+    message: str
+    count: int
+    last_seen: str | None
+    involved_object: str
+
+
+class OOMKill(BaseModel):
+    namespace: str
+    pod: str
+    container: str
+    timestamp: str
+    reason: str
