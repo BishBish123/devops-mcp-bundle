@@ -20,11 +20,15 @@ from devops_mcp_bundle.k8s.models import (
     Namespace,
     OOMKill,
     Pod,
+    PodMetric,
     PodSpec,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
-    from kubernetes_asyncio.client import CoreV1Api
+    from kubernetes_asyncio.client import (
+        CoreV1Api,
+        CustomObjectsApi,
+    )
 
 
 def _age_seconds(creation_timestamp: dt.datetime | None) -> int:
@@ -166,6 +170,36 @@ async def pod_events(api: CoreV1Api, namespace: str, name: str) -> list[Event]:
     ]
 
 
+async def top_pods(api: CustomObjectsApi, namespace: str) -> list[PodMetric]:
+    """Read pod metrics from `metrics.k8s.io/v1beta1` (requires metrics-server).
+
+    Returns [] when metrics-server is not installed (the API call raises),
+    so callers can degrade gracefully.
+    """
+    try:
+        resp = await api.list_namespaced_custom_object(
+            group="metrics.k8s.io",
+            version="v1beta1",
+            namespace=namespace,
+            plural="pods",
+        )
+    except Exception:
+        # metrics-server is genuinely optional; missing or transient errors
+        # should leave the bench/server functional with empty metrics.
+        return []
+    metrics: list[PodMetric] = []
+    for item in cast(dict[str, Any], resp).get("items", []):
+        name = item["metadata"]["name"]
+        cpu_m = 0
+        mem = 0
+        for c in item.get("containers", []):
+            usage = c.get("usage", {})
+            cpu_m += _parse_cpu(usage.get("cpu", "0"))
+            mem += _parse_memory(usage.get("memory", "0"))
+        metrics.append(PodMetric(name=name, cpu_millicores=cpu_m, memory_bytes=mem))
+    return metrics
+
+
 _MEMORY_UNITS: dict[str, int] = {
     "Ki": 1024,
     "Mi": 1024**2,
@@ -222,6 +256,52 @@ _SECRET_KEY_HINTS: tuple[str, ...] = (
 def _looks_like_secret_key(key: str) -> bool:
     k = key.lower().replace("-", "").replace("_", "")
     return any(hint.replace("_", "") in k for hint in _SECRET_KEY_HINTS)
+
+
+async def namespace_events(
+    api: CoreV1Api,
+    namespace: str,
+    only_warnings: bool = True,
+    since_min: int | None = None,
+) -> list[Event]:
+    """Return cluster events in `namespace`, by default Warning-only.
+
+    `pod_events` is scoped to one object; this helper is the cluster-wide
+    sweep — useful for "what's been going wrong in `prod` for the last
+    hour?". `only_warnings=False` includes Normal events too.
+    """
+    if since_min is not None and since_min <= 0:
+        raise ValueError("since_min must be positive when set")
+
+    field_selector = "type=Warning" if only_warnings else ""
+    resp = await api.list_namespaced_event(
+        namespace=namespace, field_selector=field_selector
+    )
+    cutoff = (
+        dt.datetime.now(dt.UTC) - dt.timedelta(minutes=since_min)
+        if since_min
+        else None
+    )
+    out: list[Event] = []
+    for e in resp.items:
+        when = e.last_timestamp or e.event_time
+        if cutoff is not None:
+            if when is None:
+                continue
+            ts = when if when.tzinfo else when.replace(tzinfo=dt.UTC)
+            if ts < cutoff:
+                continue
+        out.append(
+            Event(
+                type=e.type or "Normal",
+                reason=e.reason or "",
+                message=e.message or "",
+                count=int(e.count or 0),
+                last_seen=_ts_iso(when),
+                involved_object=f"{e.involved_object.kind}/{e.involved_object.name}",
+            )
+        )
+    return out
 
 
 def _parse_quantity(value: str) -> float:

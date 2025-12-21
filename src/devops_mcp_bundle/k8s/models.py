@@ -53,3 +53,9 @@ class OOMKill(BaseModel):
     container: str
     timestamp: str
     reason: str
+
+
+class PodMetric(BaseModel):
+    name: str
+    cpu_millicores: int
+    memory_bytes: int

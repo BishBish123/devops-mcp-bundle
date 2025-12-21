@@ -26,6 +26,7 @@ from devops_mcp_bundle.k8s.models import (
     Namespace,
     OOMKill,
     Pod,
+    PodMetric,
     PodSpec,
 )
 
@@ -97,6 +98,12 @@ async def pod_events(namespace: str, name: str) -> list[Event]:
         return await queries.pod_events(core, namespace, name)  # type: ignore[arg-type]
 
 
+@mcp.tool
+async def top_pods(namespace: str) -> list[PodMetric]:
+    """Live CPU (millicores) + memory (bytes) per pod (needs metrics-server)."""
+    async with _api() as (_, custom):
+        return await queries.top_pods(custom, namespace)  # type: ignore[arg-type]
+
 
 @mcp.tool
 async def recent_oomkills(namespace: str, since_min: int = 60) -> list[OOMKill]:
@@ -105,6 +112,19 @@ async def recent_oomkills(namespace: str, since_min: int = 60) -> list[OOMKill]:
         return await queries.recent_oomkills(core, namespace, since_min)  # type: ignore[arg-type]
 
 
+
+@mcp.tool
+async def namespace_events(
+    namespace: str, only_warnings: bool = True, since_min: int | None = None
+) -> list[Event]:
+    """Cluster events for `namespace` (Warning-only by default)."""
+    async with _api() as (core, _):
+        return await queries.namespace_events(
+            core,  # type: ignore[arg-type]
+            namespace,
+            only_warnings=only_warnings,
+            since_min=since_min,
+        )
 
 
 
