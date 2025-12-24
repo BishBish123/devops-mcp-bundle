@@ -15,6 +15,7 @@ import datetime as dt
 from typing import TYPE_CHECKING, Any, cast
 
 from devops_mcp_bundle.k8s.models import (
+    ConfigMapInfo,
     Event,
     LogLine,
     Namespace,
@@ -22,6 +23,7 @@ from devops_mcp_bundle.k8s.models import (
     Pod,
     PodMetric,
     PodSpec,
+    ResourceQuotaInfo,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -258,6 +260,33 @@ def _looks_like_secret_key(key: str) -> bool:
     return any(hint.replace("_", "") in k for hint in _SECRET_KEY_HINTS)
 
 
+async def list_configmaps(api: CoreV1Api, namespace: str) -> list[ConfigMapInfo]:
+    """List ConfigMaps in `namespace`, returning only key names (no values).
+
+    A ConfigMap is the wrong place to put a secret — but the cluster
+    will happily accept one. The agent doesn't need the value to triage
+    "is the right config mounted?", just whether the key is present.
+    Keys that *look* like secrets are reported in `redacted_keys` so a
+    reviewer can spot accidental sensitive data without it ever
+    crossing the wire to the LLM.
+    """
+    resp = await api.list_namespaced_config_map(namespace=namespace)
+    out: list[ConfigMapInfo] = []
+    for cm in resp.items:
+        keys = list((cm.data or {}).keys()) + list((cm.binary_data or {}).keys())
+        keys.sort()
+        redacted = [k for k in keys if _looks_like_secret_key(k)]
+        out.append(
+            ConfigMapInfo(
+                namespace=cm.metadata.namespace,
+                name=cm.metadata.name,
+                keys=keys,
+                redacted_keys=redacted,
+            )
+        )
+    return out
+
+
 async def namespace_events(
     api: CoreV1Api,
     namespace: str,
@@ -299,6 +328,35 @@ async def namespace_events(
                 count=int(e.count or 0),
                 last_seen=_ts_iso(when),
                 involved_object=f"{e.involved_object.kind}/{e.involved_object.name}",
+            )
+        )
+    return out
+
+
+async def resource_quotas(api: CoreV1Api, namespace: str) -> list[ResourceQuotaInfo]:
+    """List ResourceQuotas in `namespace` with computed per-resource headroom."""
+    resp = await api.list_namespaced_resource_quota(namespace=namespace)
+    out: list[ResourceQuotaInfo] = []
+    for q in resp.items:
+        hard = {k: str(v) for k, v in (q.spec.hard or {}).items()} if q.spec else {}
+        used = {k: str(v) for k, v in (q.status.used or {}).items()} if q.status else {}
+        headroom: dict[str, float] = {}
+        for k, hard_val in hard.items():
+            try:
+                h = _parse_quantity(hard_val)
+                u = _parse_quantity(used.get(k, "0"))
+            except ValueError:
+                continue
+            if h <= 0:
+                continue
+            headroom[k] = max(0.0, 1.0 - (u / h))
+        out.append(
+            ResourceQuotaInfo(
+                namespace=q.metadata.namespace,
+                name=q.metadata.name,
+                hard=hard,
+                used=used,
+                headroom=headroom,
             )
         )
     return out

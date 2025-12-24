@@ -21,6 +21,7 @@ from fastmcp import FastMCP
 
 from devops_mcp_bundle.k8s import queries
 from devops_mcp_bundle.k8s.models import (
+    ConfigMapInfo,
     Event,
     LogLine,
     Namespace,
@@ -28,6 +29,7 @@ from devops_mcp_bundle.k8s.models import (
     Pod,
     PodMetric,
     PodSpec,
+    ResourceQuotaInfo,
 )
 
 mcp: FastMCP = FastMCP(
@@ -112,6 +114,12 @@ async def recent_oomkills(namespace: str, since_min: int = 60) -> list[OOMKill]:
         return await queries.recent_oomkills(core, namespace, since_min)  # type: ignore[arg-type]
 
 
+@mcp.tool
+async def list_configmaps(namespace: str) -> list[ConfigMapInfo]:
+    """List ConfigMaps in `namespace` (key names only — no values)."""
+    async with _api() as (core, _):
+        return await queries.list_configmaps(core, namespace)  # type: ignore[arg-type]
+
 
 @mcp.tool
 async def namespace_events(
@@ -126,6 +134,12 @@ async def namespace_events(
             since_min=since_min,
         )
 
+
+@mcp.tool
+async def resource_quotas(namespace: str) -> list[ResourceQuotaInfo]:
+    """ResourceQuotas in `namespace` with computed per-resource headroom."""
+    async with _api() as (core, _):
+        return await queries.resource_quotas(core, namespace)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

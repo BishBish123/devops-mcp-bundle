@@ -37,7 +37,6 @@ class LogLine(BaseModel):
     line: str
 
 
-
 class Event(BaseModel):
     type: str = Field(description="Normal | Warning")
     reason: str
@@ -45,6 +44,12 @@ class Event(BaseModel):
     count: int
     last_seen: str | None
     involved_object: str
+
+
+class PodMetric(BaseModel):
+    name: str
+    cpu_millicores: int
+    memory_bytes: int
 
 
 class OOMKill(BaseModel):
@@ -55,7 +60,35 @@ class OOMKill(BaseModel):
     reason: str
 
 
-class PodMetric(BaseModel):
+class ConfigMapInfo(BaseModel):
+    """A ConfigMap with secret-shaped keys redacted.
+
+    The helper that builds these (`list_configmaps`) deliberately drops
+    the values: a ConfigMap is the wrong place to put secrets, but
+    plenty of teams do, and we'd rather not surface "DB_PASSWORD" to a
+    chat agent.
+    """
+
+    namespace: str
     name: str
-    cpu_millicores: int
-    memory_bytes: int
+    keys: list[str]
+    redacted_keys: list[str] = Field(
+        default_factory=list,
+        description="Keys whose names matched a secret-ish heuristic.",
+    )
+
+
+class ResourceQuotaInfo(BaseModel):
+    """Subset of a `ResourceQuota` plus computed headroom.
+
+    `usage / hard` lets the agent flag "you're at 95% of pod count
+    quota" without having to do the math itself.
+    """
+
+    namespace: str
+    name: str
+    hard: dict[str, str]
+    used: dict[str, str]
+    headroom: dict[str, float] = Field(
+        description="Per-resource (1 - used/hard), 0..1; missing if hard is unset.",
+    )
