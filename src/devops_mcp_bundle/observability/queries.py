@@ -16,6 +16,8 @@ from devops_mcp_bundle.observability.models import (
     LogEntry,
     PromSample,
     PromSeries,
+    SLOStatus,
+    WindowDiff,
 )
 
 
@@ -145,8 +147,85 @@ def _parse_duration(s: str) -> dt.timedelta:
             raise ValueError(f"unknown duration suffix in {s!r}")
 
 
-_DEFAULT_LONG_THRESHOLD = 14.4
-_DEFAULT_SHORT_THRESHOLD = 14.4
+# ---------------------------------------------------------------------------
+# Composite tools
+# ---------------------------------------------------------------------------
+
+
+async def slo_status(
+    client: httpx.AsyncClient,
+    prom_url: str,
+    service: str,
+    objective: float,
+    success_query: str,
+    total_query: str,
+    window: str = "30d",
+) -> SLOStatus:
+    """Compute SLO actual + burn rate from caller-provided PromQL.
+
+    `success_query` should evaluate to a number (rate of successful events
+    over `window`); `total_query` likewise for total events. Common pattern:
+
+        success_query = 'sum(rate(http_requests_total{code!~"5..", job="api"}[30d]))'
+        total_query   = 'sum(rate(http_requests_total{job="api"}[30d]))'
+    """
+    if not 0 < objective < 1:
+        raise ValueError("objective must be between 0 and 1 (e.g. 0.999)")
+
+    success = await _instant_scalar(client, prom_url, success_query)
+    total = await _instant_scalar(client, prom_url, total_query)
+    actual = 0.0 if total <= 0 else success / total
+
+    error_rate = 1.0 - actual
+    allowed_error = 1.0 - objective
+    error_budget_remaining = 1.0 - (error_rate / allowed_error) if allowed_error > 0 else 1.0
+    burn_rate = error_rate / allowed_error if allowed_error > 0 else 0.0
+    return SLOStatus(
+        service=service,
+        objective=objective,
+        window=window,
+        actual=actual,
+        error_budget_remaining=error_budget_remaining,
+        burn_rate=burn_rate,
+    )
+
+
+async def compare_windows(
+    client: httpx.AsyncClient,
+    prom_url: str,
+    promql_a: str,
+    promql_b: str,
+    label_a: str = "now",
+    label_b: str = "before",
+) -> WindowDiff:
+    """Run two PromQL expressions, return their delta + percent change.
+
+    Useful for "is this metric different than it was an hour ago?" — the
+    caller supplies both PromQL queries (typically one with `[5m] offset 1h`
+    or similar) so the tool stays neutral about windowing semantics.
+    """
+    a = await _instant_scalar(client, prom_url, promql_a)
+    b = await _instant_scalar(client, prom_url, promql_b)
+    delta = a - b
+    pct = (delta / b * 100.0) if b != 0 else None
+    return WindowDiff(
+        promql=f"a={promql_a!r} b={promql_b!r}",
+        window_a_label=label_a,
+        window_b_label=label_b,
+        window_a_value=a,
+        window_b_value=b,
+        delta=delta,
+        pct_change=pct,
+    )
+
+
+async def _instant_scalar(client: httpx.AsyncClient, prom_url: str, promql: str) -> float:
+    series = await prom_query(client, prom_url, promql)
+    if not series or not series[0].samples:
+        return 0.0
+    return float(series[0].samples[-1].value)
+
+
 
 
 

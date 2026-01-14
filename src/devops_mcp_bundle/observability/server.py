@@ -18,6 +18,8 @@ from devops_mcp_bundle.observability import queries
 from devops_mcp_bundle.observability.models import (
     LogEntry,
     PromSeries,
+    SLOStatus,
+    WindowDiff,
 )
 
 mcp: FastMCP = FastMCP(
@@ -74,6 +76,31 @@ async def loki_query(logql: str, since: str = "1h", limit: int = 100) -> list[Lo
         return await queries.loki_query(c, _loki_url(), logql, since=since, limit=limit)
 
 
+@mcp.tool
+async def slo_status(
+    service: str,
+    objective: float,
+    success_query: str,
+    total_query: str,
+    window: str = "30d",
+) -> SLOStatus:
+    """Compute SLO attainment + burn rate from PromQL the caller supplies."""
+    async with _client() as c:
+        return await queries.slo_status(
+            c, _prom_url(), service, objective, success_query, total_query, window
+        )
+
+
+@mcp.tool
+async def compare_windows(
+    promql_a: str,
+    promql_b: str,
+    label_a: str = "now",
+    label_b: str = "before",
+) -> WindowDiff:
+    """Compute delta + pct change between two PromQL expressions."""
+    async with _client() as c:
+        return await queries.compare_windows(c, _prom_url(), promql_a, promql_b, label_a, label_b)
 
 
 _cli = typer.Typer(name="mcp-observability", add_completion=False)
