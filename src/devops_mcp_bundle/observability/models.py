@@ -17,6 +17,15 @@ class PromSeries(BaseModel):
     samples: list[PromSample]
 
 
+class Alert(BaseModel):
+    name: str
+    state: str  # firing | pending
+    severity: str | None
+    summary: str | None
+    started_at: str | None
+    labels: dict[str, str]
+
+
 class LogEntry(BaseModel):
     timestamp_ns: int
     line: str

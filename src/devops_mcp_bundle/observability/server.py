@@ -16,6 +16,7 @@ from fastmcp import FastMCP
 
 from devops_mcp_bundle.observability import queries
 from devops_mcp_bundle.observability.models import (
+    Alert,
     LogEntry,
     PromSeries,
     SLOStatus,
@@ -65,6 +66,12 @@ async def prom_range(promql: str, start: str, end: str, step: str = "15s") -> li
     async with _client() as c:
         return await queries.prom_range(c, _prom_url(), promql, start, end, step)
 
+
+@mcp.tool
+async def prom_alerts() -> list[Alert]:
+    """List firing/pending alerts from Prometheus."""
+    async with _client() as c:
+        return await queries.prom_alerts(c, _prom_url())
 
 
 

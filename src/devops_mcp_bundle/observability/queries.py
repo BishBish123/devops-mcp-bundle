@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 from devops_mcp_bundle.observability.models import (
+    Alert,
     LogEntry,
     PromSample,
     PromSeries,
@@ -61,6 +62,26 @@ async def prom_range(
     )
     body = _check(resp, "prom_range")
     return _parse_prom_data(body["data"])
+
+
+async def prom_alerts(client: httpx.AsyncClient, prom_url: str) -> list[Alert]:
+    """List firing/pending alerts from Prometheus."""
+    resp = await client.get(f"{prom_url}/api/v1/alerts")
+    body = _check(resp, "prom_alerts")
+    out: list[Alert] = []
+    for a in body["data"].get("alerts", []):
+        labels = dict(a.get("labels", {}))
+        out.append(
+            Alert(
+                name=labels.get("alertname", ""),
+                state=a.get("state", ""),
+                severity=labels.get("severity"),
+                summary=(a.get("annotations") or {}).get("summary"),
+                started_at=a.get("activeAt"),
+                labels=labels,
+            )
+        )
+    return out
 
 
 def _parse_prom_data(data: dict[str, Any]) -> list[PromSeries]:
