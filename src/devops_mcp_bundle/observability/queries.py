@@ -14,7 +14,9 @@ import httpx
 
 from devops_mcp_bundle.observability.models import (
     Alert,
+    BurnRateWindow,
     LogEntry,
+    MultiWindowBurnRate,
     PromSample,
     PromSeries,
     SLOStatus,
@@ -247,6 +249,57 @@ async def _instant_scalar(client: httpx.AsyncClient, prom_url: str, promql: str)
     return float(series[0].samples[-1].value)
 
 
+# Default burn-rate thresholds from the SRE workbook (page-worthy fast burns).
+# 14.4x for 1h means: at this rate, the 30-day error budget is consumed in
+# (30d / 14.4) ≈ 50h. Couple it with a 5m window so transient blips don't
+# fire the page.
+_DEFAULT_LONG_THRESHOLD = 14.4
+_DEFAULT_SHORT_THRESHOLD = 14.4
+
+
+async def multi_window_burn_rate(
+    client: httpx.AsyncClient,
+    prom_url: str,
+    objective: float,
+    long_burn_query: str,
+    short_burn_query: str,
+    long_window: str = "1h",
+    short_window: str = "5m",
+    long_threshold: float = _DEFAULT_LONG_THRESHOLD,
+    short_threshold: float = _DEFAULT_SHORT_THRESHOLD,
+) -> MultiWindowBurnRate:
+    """Evaluate a two-window burn-rate alert.
+
+    Returns ``page=True`` only when *both* windows exceed their thresholds —
+    the canonical Google SRE workbook recipe. Caller supplies the PromQL
+    for each burn rate (typically ``error_rate / (1 - objective)`` over the
+    matching window); the helper just compares the values to thresholds.
+    """
+    if not 0 < objective < 1:
+        raise ValueError("objective must be between 0 and 1 (e.g. 0.999)")
+    if long_threshold <= 0 or short_threshold <= 0:
+        raise ValueError("thresholds must be positive")
+
+    long_val = await _instant_scalar(client, prom_url, long_burn_query)
+    short_val = await _instant_scalar(client, prom_url, short_burn_query)
+    long_breach = long_val >= long_threshold
+    short_breach = short_val >= short_threshold
+    return MultiWindowBurnRate(
+        objective=objective,
+        long_window=BurnRateWindow(
+            window=long_window,
+            burn_rate=long_val,
+            threshold=long_threshold,
+            breaching=long_breach,
+        ),
+        short_window=BurnRateWindow(
+            window=short_window,
+            burn_rate=short_val,
+            threshold=short_threshold,
+            breaching=short_breach,
+        ),
+        page=long_breach and short_breach,
+    )
 
 
 

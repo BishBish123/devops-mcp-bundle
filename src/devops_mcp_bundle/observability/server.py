@@ -18,6 +18,7 @@ from devops_mcp_bundle.observability import queries
 from devops_mcp_bundle.observability.models import (
     Alert,
     LogEntry,
+    MultiWindowBurnRate,
     PromSeries,
     SLOStatus,
     WindowDiff,
@@ -74,6 +75,30 @@ async def prom_alerts() -> list[Alert]:
         return await queries.prom_alerts(c, _prom_url())
 
 
+
+@mcp.tool
+async def multi_window_burn_rate(
+    objective: float,
+    long_burn_query: str,
+    short_burn_query: str,
+    long_window: str = "1h",
+    short_window: str = "5m",
+    long_threshold: float = 14.4,
+    short_threshold: float = 14.4,
+) -> MultiWindowBurnRate:
+    """Evaluate a Google SRE-workbook two-window burn-rate alert."""
+    async with _client() as c:
+        return await queries.multi_window_burn_rate(
+            c,
+            _prom_url(),
+            objective=objective,
+            long_burn_query=long_burn_query,
+            short_burn_query=short_burn_query,
+            long_window=long_window,
+            short_window=short_window,
+            long_threshold=long_threshold,
+            short_threshold=short_threshold,
+        )
 
 
 @mcp.tool

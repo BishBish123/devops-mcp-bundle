@@ -51,3 +51,17 @@ class WindowDiff(BaseModel):
     window_b_value: float | None
     delta: float | None
     pct_change: float | None
+
+
+class BurnRateWindow(BaseModel):
+    window: str
+    burn_rate: float
+    threshold: float
+    breaching: bool
+
+
+class MultiWindowBurnRate(BaseModel):
+    objective: float
+    long_window: BurnRateWindow
+    short_window: BurnRateWindow
+    page: bool
