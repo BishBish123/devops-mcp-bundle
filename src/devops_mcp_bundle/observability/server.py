@@ -21,6 +21,7 @@ from devops_mcp_bundle.observability.models import (
     MultiWindowBurnRate,
     PromSeries,
     SLOStatus,
+    Target,
     WindowDiff,
 )
 
@@ -74,6 +75,12 @@ async def prom_alerts() -> list[Alert]:
     async with _client() as c:
         return await queries.prom_alerts(c, _prom_url())
 
+
+@mcp.tool
+async def prom_targets(state: str = "active") -> list[Target]:
+    """List Prometheus scrape targets (active|dropped|any) with health + last error."""
+    async with _client() as c:
+        return await queries.prom_targets(c, _prom_url(), state=state)
 
 
 @mcp.tool

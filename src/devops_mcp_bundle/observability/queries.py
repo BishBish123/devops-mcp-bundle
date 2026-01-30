@@ -20,6 +20,7 @@ from devops_mcp_bundle.observability.models import (
     PromSample,
     PromSeries,
     SLOStatus,
+    Target,
     WindowDiff,
 )
 
@@ -64,6 +65,37 @@ async def prom_range(
     )
     body = _check(resp, "prom_range")
     return _parse_prom_data(body["data"])
+
+
+async def prom_targets(
+    client: httpx.AsyncClient, prom_url: str, state: str = "active"
+) -> list[Target]:
+    """List scrape targets from `/api/v1/targets`.
+
+    `state` is one of ``active``, ``dropped``, or ``any``; we forward it
+    verbatim to Prometheus. Useful for triage ("which targets are down
+    right now?") and for the slow-query / pod-debug skills to confirm
+    that the cluster's metrics surface is actually healthy before they
+    trust a `slo_status` calculation built on top of it.
+    """
+    if state not in {"active", "dropped", "any"}:
+        raise ValueError(f"state must be one of active|dropped|any, got {state!r}")
+    resp = await client.get(f"{prom_url}/api/v1/targets", params={"state": state})
+    body = _check(resp, "prom_targets")
+    out: list[Target] = []
+    for t in body["data"].get("activeTargets", []):
+        labels = t.get("labels") or {}
+        out.append(
+            Target(
+                job=labels.get("job", ""),
+                instance=labels.get("instance", ""),
+                health=t.get("health", "unknown"),
+                last_scrape=t.get("lastScrape"),
+                last_error=t.get("lastError") or None,
+                scrape_pool=t.get("scrapePool"),
+            )
+        )
+    return out
 
 
 async def prom_alerts(client: httpx.AsyncClient, prom_url: str) -> list[Alert]:

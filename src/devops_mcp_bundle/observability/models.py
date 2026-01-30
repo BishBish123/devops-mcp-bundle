@@ -53,14 +53,35 @@ class WindowDiff(BaseModel):
     pct_change: float | None
 
 
+class Target(BaseModel):
+    """A scrape target as returned by `/api/v1/targets`."""
+
+    job: str
+    instance: str
+    health: str  # up | down | unknown
+    last_scrape: str | None
+    last_error: str | None
+    scrape_pool: str | None = None
+
+
 class BurnRateWindow(BaseModel):
-    window: str
+    """One window of a multiwindow burn-rate calculation."""
+
+    window: str  # e.g. "1h", "5m"
     burn_rate: float
     threshold: float
     breaching: bool
 
 
 class MultiWindowBurnRate(BaseModel):
+    """Multi-window, multi-burn-rate SLO alert evaluation.
+
+    Models the Google SRE workbook recipe: alert only when *both* a long
+    window and a short window are burning above the same threshold. The
+    long window catches sustained burns; the short window keeps the alert
+    from firing on a stale incident that has since recovered.
+    """
+
     objective: float
     long_window: BurnRateWindow
     short_window: BurnRateWindow
