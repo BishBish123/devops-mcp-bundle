@@ -334,5 +334,44 @@ async def multi_window_burn_rate(
     )
 
 
+# ---------------------------------------------------------------------------
+# LogQL helpers
+# ---------------------------------------------------------------------------
 
 
+_LOGQL_LABEL_ESCAPES = str.maketrans(
+    {
+        "\\": "\\\\",
+        '"': '\\"',
+        "\n": "\\n",
+        "\r": "\\r",
+        "\t": "\\t",
+    }
+)
+
+
+def escape_logql_label(value: str) -> str:
+    """Escape a value safely for use inside ``{label="..."}``.
+
+    LogQL string literals are double-quoted with backslash escapes (same
+    rules as Prometheus). Naïve interpolation lets a caller break out
+    with an unescaped ``"`` and inject a second matcher. This helper is
+    the only correct way to put dynamic values into a label matcher; the
+    test suite asserts injected payloads come back inert.
+    """
+    return value.translate(_LOGQL_LABEL_ESCAPES)
+
+
+def render_logql(template: str, **labels: str) -> str:
+    """Render a LogQL template, escaping every interpolated label value.
+
+    Templates use ``{name}`` placeholders (Python `str.format` syntax).
+    Every supplied value is run through :func:`escape_logql_label` before
+    substitution, so callers can hand in untrusted values without having
+    to remember to escape them.
+
+        >>> render_logql('{{app="{app}"}} |= "{needle}"', app="api", needle='oh "no"')
+        '{app="api"} |= "oh \\\\"no\\\\""'
+    """
+    safe = {k: escape_logql_label(v) for k, v in labels.items()}
+    return template.format(**safe)
