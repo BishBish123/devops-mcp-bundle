@@ -54,11 +54,13 @@ interpreter explicitly: `PYTHON=/opt/homebrew/opt/python@3.12/bin/python3.12 bas
 
 ```bash
 # one-line installer (creates a venv at ~/.local/share/devops-mcp-bundle).
-# Defaults to `main` (latest); pin a tag once a release is published
-# to the GitHub remote.
+# Defaults to a pinned commit SHA — `curl | bash` is reproducible. The
+# pinned SHA is bumped each release; override with INSTALL_REF for tip
+# of main or a specific tag.
 curl -fsSL https://raw.githubusercontent.com/BishBish123/devops-mcp-bundle/main/install.sh | bash
 
-# Pin a specific tag, branch, or commit (e.g. once v0.2.0 is released):
+# Override to a specific tag, branch, or commit:
+INSTALL_REF=main   bash <(curl -fsSL https://raw.githubusercontent.com/BishBish123/devops-mcp-bundle/main/install.sh)
 INSTALL_REF=v0.2.0 bash <(curl -fsSL https://raw.githubusercontent.com/BishBish123/devops-mcp-bundle/main/install.sh)
 
 # or, manually from a checkout (use `uv sync --extra dev` if you want
@@ -412,10 +414,10 @@ install.sh       one-line installer for end users
 
 ## Contributing — GitHub Actions SHA pinning
 
-The CI workflows in `.github/workflows/` currently use placeholder SHAs
-(`PLACEHOLDER_SHA`) for third-party actions (`actions/checkout`,
-`astral-sh/setup-uv`). Before the next release, replace each placeholder
-with the real commit SHA for the corresponding tag:
+The CI workflows in `.github/workflows/` pin every third-party action
+(`actions/checkout`, `astral-sh/setup-uv`) to a full commit SHA, with
+the human-readable tag in a trailing comment. When bumping a pinned
+action, refresh the SHA in the same commit:
 
 ```bash
 # Find the SHA for actions/checkout@v4:
@@ -425,7 +427,7 @@ git ls-remote https://github.com/actions/checkout refs/tags/v4
 git ls-remote https://github.com/astral-sh/setup-uv refs/tags/v3
 ```
 
-Then update the `uses:` lines in the workflow files:
+The format in the workflow files is:
 
 ```yaml
 - uses: actions/checkout@<sha>  # v4

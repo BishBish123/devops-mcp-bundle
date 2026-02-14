@@ -17,17 +17,18 @@ set -euo pipefail
 # or a local checkout.
 
 VENV="${HOME}/.local/share/devops-mcp-bundle"
-# Default to `main` until a release tag is published to the GitHub
-# remote. The `v0.1.0` tag was promoted on the local checkout but the
-# push of that tag to origin is part of the v0.1 release checklist;
-# piping this script while the tag is unpublished previously crashed
-# with `pathspec 'v0.1.0' did not match`. Once a tag is pushed, point
-# releases can flip the default by editing this line.
+# Default to a pinned commit SHA so `curl … | bash` is reproducible.
+# Floating on `main` made every fresh install pull whatever HEAD
+# happened to be at the moment — fine on a quiet day, terrible the
+# moment a malicious PR slips into HEAD or a refactor breaks the
+# entry point between when the user copied the URL and when their CI
+# re-ran it. Bump this SHA in lockstep with each release; CI
+# verifies the SHA exists on origin before publishing the release.
 #
 # Override INSTALL_REF to pin a specific tag, branch, or commit:
-#   INSTALL_REF=main bash install.sh         # explicit (default)
-#   INSTALL_REF=v0.2.0 bash install.sh       # a future release
-INSTALL_REF="${INSTALL_REF:-main}"
+#   INSTALL_REF=main bash install.sh         # tip of main (unpinned)
+#   INSTALL_REF=v0.2.0 bash install.sh       # a future release tag
+INSTALL_REF="${INSTALL_REF:-5e3e46629d3a2b2c340f838e167030f5bd39109a}"
 PIP_SOURCE="${PIP_SOURCE:-git+https://github.com/BishBish123/devops-mcp-bundle.git@${INSTALL_REF}}"
 # Allow callers to point us at a specific interpreter — Homebrew's
 # `python3` is 3.13 today, and macOS still ships 3.9 as the system
