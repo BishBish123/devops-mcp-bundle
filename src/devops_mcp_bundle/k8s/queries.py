@@ -62,9 +62,18 @@ def _ts_iso(value: dt.datetime | None) -> str | None:
 # Tools
 # ---------------------------------------------------------------------------
 
+# Per-call request timeout for kubernetes_asyncio API methods. A scalar
+# value is interpreted as a *total* timeout by urllib3, which silently
+# discards the 5 s connect bound configured at server startup. The
+# 2-tuple form `(connect, read)` is what the configuration setter
+# expects and what every call site here passes — keep it as a
+# module-level constant so the contract is obvious and the value can
+# be tuned in one place.
+_K8S_REQUEST_TIMEOUT: tuple[int, int] = (5, 30)
+
 
 async def list_namespaces(api: CoreV1Api) -> list[Namespace]:
-    resp = await api.list_namespace(_request_timeout=30)
+    resp = await api.list_namespace(_request_timeout=_K8S_REQUEST_TIMEOUT)
     return [
         Namespace(
             name=ns.metadata.name,
@@ -76,7 +85,7 @@ async def list_namespaces(api: CoreV1Api) -> list[Namespace]:
 
 
 async def list_pods(api: CoreV1Api, namespace: str, label_selector: str | None = None) -> list[Pod]:
-    resp = await api.list_namespaced_pod(namespace=namespace, label_selector=label_selector or "", _request_timeout=30)
+    resp = await api.list_namespaced_pod(namespace=namespace, label_selector=label_selector or "", _request_timeout=_K8S_REQUEST_TIMEOUT)
     return [_to_pod(p) for p in resp.items]
 
 
@@ -96,7 +105,7 @@ def _to_pod(p: Any) -> Pod:
 
 
 async def describe_pod(api: CoreV1Api, namespace: str, name: str) -> PodSpec:
-    p = await api.read_namespaced_pod(name=name, namespace=namespace, _request_timeout=30)
+    p = await api.read_namespaced_pod(name=name, namespace=namespace, _request_timeout=_K8S_REQUEST_TIMEOUT)
     containers: list[dict[str, object]] = [
         {
             "name": c.name,
@@ -151,7 +160,7 @@ async def pod_logs(
     # `str`; pass `""` to mean "default container".
     text = await api.read_namespaced_pod_log(
         name=name, namespace=namespace, container=container or "", tail_lines=tail,
-        _request_timeout=30,
+        _request_timeout=_K8S_REQUEST_TIMEOUT,
     )
     if not text:
         return []
@@ -178,7 +187,7 @@ async def pod_events(api: CoreV1Api, namespace: str, name: str) -> list[Event]:
     resp = await api.list_namespaced_event(
         namespace=namespace,
         field_selector=f"involvedObject.name={name}",
-        _request_timeout=30,
+        _request_timeout=_K8S_REQUEST_TIMEOUT,
     )
     return [
         Event(
@@ -208,7 +217,7 @@ async def top_pods(api: CustomObjectsApi, namespace: str) -> list[PodMetric]:
             version="v1beta1",
             namespace=namespace,
             plural="pods",
-            _request_timeout=30,
+            _request_timeout=_K8S_REQUEST_TIMEOUT,
         )
     except ImportError:
         # The metrics-server custom-object machinery may try to import
@@ -319,7 +328,7 @@ async def list_configmaps(api: CoreV1Api, namespace: str) -> list[ConfigMapInfo]
     reviewer can spot accidental sensitive data without it ever
     crossing the wire to the LLM.
     """
-    resp = await api.list_namespaced_config_map(namespace=namespace, _request_timeout=30)
+    resp = await api.list_namespaced_config_map(namespace=namespace, _request_timeout=_K8S_REQUEST_TIMEOUT)
     out: list[ConfigMapInfo] = []
     for cm in resp.items:
         keys = list((cm.data or {}).keys()) + list((cm.binary_data or {}).keys())
@@ -385,7 +394,7 @@ async def namespace_events(
         namespace=namespace,
         field_selector=field_selector,
         limit=limit,
-        _request_timeout=30,
+        _request_timeout=_K8S_REQUEST_TIMEOUT,
     )
     if len(resp.items) > limit:
         raise ValueError(
@@ -416,7 +425,7 @@ async def namespace_events(
 
 async def resource_quotas(api: CoreV1Api, namespace: str) -> list[ResourceQuotaInfo]:
     """List ResourceQuotas in `namespace` with computed per-resource headroom."""
-    resp = await api.list_namespaced_resource_quota(namespace=namespace, _request_timeout=30)
+    resp = await api.list_namespaced_resource_quota(namespace=namespace, _request_timeout=_K8S_REQUEST_TIMEOUT)
     out: list[ResourceQuotaInfo] = []
     for q in resp.items:
         hard = {k: str(v) for k, v in (q.spec.hard or {}).items()} if q.spec else {}
@@ -558,7 +567,7 @@ async def recent_oomkills(api: CoreV1Api, namespace: str, since_min: int = 60) -
     """Return Warning events whose reason contains 'OOMKill' within `since_min`."""
     if since_min <= 0:
         raise ValueError("since_min must be positive")
-    resp = await api.list_namespaced_event(namespace=namespace, field_selector="type=Warning", _request_timeout=30)
+    resp = await api.list_namespaced_event(namespace=namespace, field_selector="type=Warning", _request_timeout=_K8S_REQUEST_TIMEOUT)
     cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=since_min)
     out: list[OOMKill] = []
     for e in resp.items:

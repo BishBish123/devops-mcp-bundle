@@ -121,7 +121,7 @@ class TestListPods:
         )
         result = await queries.list_pods(api, "default", label_selector="app=web")
         api.list_namespaced_pod.assert_awaited_once_with(
-            namespace="default", label_selector="app=web", _request_timeout=30
+            namespace="default", label_selector="app=web", _request_timeout=(5, 30)
         )
         assert [p.name for p in result] == ["web-0", "web-1"]
         assert result[0].restart_count == 2
@@ -132,7 +132,7 @@ class TestListPods:
         api = AsyncMock()
         api.list_namespaced_pod.return_value = _ns(items=[])
         await queries.list_pods(api, "default")
-        api.list_namespaced_pod.assert_awaited_once_with(namespace="default", label_selector="", _request_timeout=30)
+        api.list_namespaced_pod.assert_awaited_once_with(namespace="default", label_selector="", _request_timeout=(5, 30))
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ class TestPodEvents:
         )
         out = await queries.pod_events(api, "default", "web-0")
         api.list_namespaced_event.assert_awaited_once_with(
-            namespace="default", field_selector="involvedObject.name=web-0", _request_timeout=30
+            namespace="default", field_selector="involvedObject.name=web-0", _request_timeout=(5, 30)
         )
         assert [e.reason for e in out] == ["BackOff", "Scheduled"]
         assert out[0].type == "Warning"
@@ -363,11 +363,17 @@ class TestNamespaceEventsLimit:
         assert call_kwargs.get("limit") == 50
 
     async def test_namespace_events_passes_request_timeout(self) -> None:
+        # urllib3 reads `_request_timeout` as `(connect, read)` when it
+        # is a tuple, and as a *total* timeout when it is a scalar — the
+        # scalar form silently discards the 5 s connect bound configured
+        # at server startup. Pin the tuple shape so a regression
+        # (someone replacing `_K8S_REQUEST_TIMEOUT` with `30`) is caught
+        # by the unit suite.
         api = AsyncMock()
         api.list_namespaced_event.return_value = _ns(items=[])
         await queries.namespace_events(api, "default")
         call_kwargs = api.list_namespaced_event.call_args.kwargs
-        assert call_kwargs.get("_request_timeout") == 30
+        assert call_kwargs.get("_request_timeout") == (5, 30)
 
     async def test_namespace_events_limit_exceeds_max_rejected(self) -> None:
         api = AsyncMock()

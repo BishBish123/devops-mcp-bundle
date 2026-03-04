@@ -111,7 +111,7 @@ class TestNamespaceEvents:
             namespace="prod",
             field_selector="type=Warning",
             limit=queries.MAX_K8S_EVENTS,
-            _request_timeout=30,
+            _request_timeout=(5, 30),
         )
 
     async def test_include_normal_events(self) -> None:
@@ -122,7 +122,7 @@ class TestNamespaceEvents:
             namespace="prod",
             field_selector="",
             limit=queries.MAX_K8S_EVENTS,
-            _request_timeout=30,
+            _request_timeout=(5, 30),
         )
 
     async def test_since_filter_drops_old_events(self) -> None:
