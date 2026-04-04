@@ -1,0 +1,48 @@
+# Pre-commit hooks for devops-mcp-bundle.
+#
+# Install:    uv tool install pre-commit && pre-commit install
+# Run once:   pre-commit run --all-files
+#
+# CI runs the same checks via `make check` + `make test`. This config
+# exists so the same bar is enforced before each commit, not just on
+# push.
+
+minimum_pre_commit_version: "3.7.0"
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '^(uv\.lock|.+\.svg)$'
+      - id: end-of-file-fixer
+        exclude: '^(uv\.lock|.+\.svg)$'
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run mypy src
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      - id: pytest-quick
+        name: pytest -m "not integration"
+        entry: uv run pytest -m "not integration" -q
+        language: system
+        pass_filenames: false
+        stages: [pre-push]  # full suite on push, not every commit
