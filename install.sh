@@ -48,7 +48,7 @@ PYV="$("$PYTHON" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
 case "$PYV" in
     3.11|3.12) ok "python ${PYV} (${PYTHON})";;
     *)
-        die "need python 3.11 or 3.12, found ${PYV} (interpreter: ${PYTHON})
+        die "need python 3.11 or 3.12, found ${PYV} (interpreter: ${PYTHON}) — set PYTHON=python3.12 to override
 
 Fix options (any one is enough):
   - uv:      uv python install 3.12  &&  PYTHON=\"\$(uv python find 3.12)\" bash install.sh
@@ -116,10 +116,12 @@ cat <<EOF
        export LOKI_URL=http://localhost:3100
 
   2. Wire the bundle into Claude Code:
-       devops-mcp install --pgvector-dsn "\$POSTGRES_DSN" \\
+       devops-mcp install --postgres-dsn  "\$POSTGRES_DSN" \\
                           --prometheus-url "\$PROMETHEUS_URL" \\
-                          --loki-url "\$LOKI_URL" \\
-                          --kubeconfig "\$KUBECONFIG"
+                          --loki-url       "\$LOKI_URL" \\
+                          --kubeconfig     "\$KUBECONFIG"
+       # --pgvector-dsn is the deprecated alias of --postgres-dsn (the
+       # server is generic Postgres DBA, not pgvector-specific).
 
   3. Restart Claude Code. The three servers should now show up in
      'Manage MCP Servers'.
