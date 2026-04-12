@@ -109,9 +109,7 @@ def install(
 ) -> None:
     """Wire every server into Claude Code's mcp.json (idempotent)."""
     config = config.expanduser()
-    existing = (
-        json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
-    )
+    existing = json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
     servers = existing.setdefault("mcpServers", {})
 
     common_env: dict[str, str] = {}

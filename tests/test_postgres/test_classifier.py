@@ -60,8 +60,7 @@ class TestRejectedReasons:
 
     def test_cte_with_insert_reason(self) -> None:
         c = classify_sql(
-            "WITH inserted AS (INSERT INTO t (x) VALUES (1) RETURNING *) "
-            "SELECT * FROM inserted"
+            "WITH inserted AS (INSERT INTO t (x) VALUES (1) RETURNING *) SELECT * FROM inserted"
         )
         assert c.is_read_only is False
         assert c.leading_keyword == "WITH"

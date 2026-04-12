@@ -92,10 +92,7 @@ class TestExoticReadOnly:
             "EXPLAIN (FORMAT JSON, COSTS OFF) SELECT * FROM users",
             "EXPLAIN (BUFFERS, FORMAT TEXT) SELECT 1",
             # A WITH that has multiple CTEs — all reads.
-            (
-                "WITH a AS (SELECT 1), b AS (SELECT 2) "
-                "SELECT * FROM a CROSS JOIN b"
-            ),
+            ("WITH a AS (SELECT 1), b AS (SELECT 2) SELECT * FROM a CROSS JOIN b"),
             # SHOW with a parameter name — read-only.
             "SHOW search_path",
             # VALUES with a CTE on top.
@@ -113,20 +110,11 @@ class TestExoticRejected:
         "sql",
         [
             # CTE that hides a DELETE.
-            (
-                "WITH deleted AS (DELETE FROM users WHERE id = 1 RETURNING *) "
-                "SELECT * FROM deleted"
-            ),
+            ("WITH deleted AS (DELETE FROM users WHERE id = 1 RETURNING *) SELECT * FROM deleted"),
             # CTE that hides an UPDATE.
-            (
-                "WITH updated AS (UPDATE users SET name = 'x' RETURNING *) "
-                "SELECT * FROM updated"
-            ),
+            ("WITH updated AS (UPDATE users SET name = 'x' RETURNING *) SELECT * FROM updated"),
             # CTE chain where the *second* CTE writes.
-            (
-                "WITH a AS (SELECT 1), b AS (INSERT INTO t VALUES (1) RETURNING *) "
-                "SELECT * FROM b"
-            ),
+            ("WITH a AS (SELECT 1), b AS (INSERT INTO t VALUES (1) RETURNING *) SELECT * FROM b"),
             # Trailing-DML-after-SELECT (semicolon split).
             "SELECT 1; INSERT INTO t VALUES (1)",
             # EXPLAIN with ANALYZE buried in the options list.

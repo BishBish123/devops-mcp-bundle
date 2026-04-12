@@ -378,9 +378,7 @@ class TestRenderLogql:
         assert '\\"' in out
 
     def test_multiple_placeholders(self) -> None:
-        out = queries.render_logql(
-            '{{app="{app}", env="{env}"}}', app="api", env="prod"
-        )
+        out = queries.render_logql('{{app="{app}", env="{env}"}}', app="api", env="prod")
         assert out == '{app="api", env="prod"}'
 
 

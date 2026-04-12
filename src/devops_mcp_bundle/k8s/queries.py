@@ -303,14 +303,8 @@ async def namespace_events(
         raise ValueError("since_min must be positive when set")
 
     field_selector = "type=Warning" if only_warnings else ""
-    resp = await api.list_namespaced_event(
-        namespace=namespace, field_selector=field_selector
-    )
-    cutoff = (
-        dt.datetime.now(dt.UTC) - dt.timedelta(minutes=since_min)
-        if since_min
-        else None
-    )
+    resp = await api.list_namespaced_event(namespace=namespace, field_selector=field_selector)
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=since_min) if since_min else None
     out: list[Event] = []
     for e in resp.items:
         when = e.last_timestamp or e.event_time

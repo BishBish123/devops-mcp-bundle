@@ -81,9 +81,7 @@ class TestNamespaceEvents:
         api = AsyncMock()
         api.list_namespaced_event.return_value = _ns(items=[])
         await queries.namespace_events(api, "prod", only_warnings=False)
-        api.list_namespaced_event.assert_awaited_once_with(
-            namespace="prod", field_selector=""
-        )
+        api.list_namespaced_event.assert_awaited_once_with(namespace="prod", field_selector="")
 
     async def test_since_filter_drops_old_events(self) -> None:
         api = AsyncMock()

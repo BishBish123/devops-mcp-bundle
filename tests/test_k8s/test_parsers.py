@@ -106,9 +106,7 @@ class TestSecretKeyHeuristic:
 
 class TestRedactSecretsFromLogs:
     def test_redacts_kv_assignment(self) -> None:
-        out = queries.redact_secrets_from_logs(
-            "starting up DB_PASSWORD=hunter2 log_level=info"
-        )
+        out = queries.redact_secrets_from_logs("starting up DB_PASSWORD=hunter2 log_level=info")
         assert "hunter2" not in out
         assert "DB_PASSWORD=<redacted>" in out
         assert "log_level=info" in out

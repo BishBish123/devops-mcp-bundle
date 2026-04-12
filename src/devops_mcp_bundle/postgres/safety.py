@@ -116,9 +116,7 @@ def classify_sql(sql: str) -> Classification:
 
     statements = list(sqlparse.parse(sql))
     if len(statements) != 1:
-        return Classification(
-            False, None, f"expected exactly one statement, got {len(statements)}"
-        )
+        return Classification(False, None, f"expected exactly one statement, got {len(statements)}")
 
     stmt = statements[0]
     leading: str | None = None
@@ -149,8 +147,6 @@ def classify_sql(sql: str) -> Classification:
         if token.ttype in (DML, DDL) and kw in _MUTATING_KEYWORDS:
             return Classification(False, leading, f"{leading} body contains {kw}")
         if token.ttype is Keyword and kw == "ANALYZE":
-            return Classification(
-                False, leading, "ANALYZE updates planner statistics (a write)"
-            )
+            return Classification(False, leading, "ANALYZE updates planner statistics (a write)")
 
     return Classification(True, leading, f"{leading} is read-only")
