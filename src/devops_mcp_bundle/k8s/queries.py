@@ -12,6 +12,7 @@ for `delete`, `patch`, or `exec`.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from typing import TYPE_CHECKING, Any, cast
 
 from devops_mcp_bundle.k8s.models import (
@@ -375,6 +376,46 @@ def _parse_quantity(value: str) -> float:
     return float(s)
 
 
+# Secret-key alternation: covers password / pwd / passwd, secret, token,
+# api_key / apiKey / api-key, access_key, auth / authorization, bearer,
+# credentials, private_key, client_secret. Case-insensitive at use site.
+_SECRET_KEY_PATTERN = (
+    r"(?:p(?:ass)?w(?:or)?d|pass(?:wd)?|secret|tokens?|"  # noqa: S105 — regex
+    r"api[_-]?keys?|access[_-]?keys?|"
+    r"auth(?:oriz(?:ation|ed))?|bearer|cred(?:ential)?s?|"
+    r"priv(?:ate)?[_-]?keys?|client[_-]?secrets?)"
+)
+
+# Capture the *full* compound key (so `DB_PASSWORD` and `apiKey` are matched
+# as units), the literal operator + spacing, the value, and any matching
+# pair of surrounding quotes. The `(?:^|(?<=[...]))` anchor allows the key
+# to start at the beginning of the line, after whitespace, or after one of
+# the common delimiters that bound a key in a log line — but *not* after
+# another letter (so we don't mistake "the password algorithm" for a kv
+# pair, since there's no `:` or `=` directly after the word).
+_REDACT_KV_RE = re.compile(
+    r"(?ix)"
+    r"(?:^|(?<=[\s_\-/.,;\[\]\{\}\(\)]))"
+    rf"(?P<key>[A-Za-z0-9_-]*?{_SECRET_KEY_PATTERN})"
+    r"(?P<sep>\s*[:=]\s*)"
+    # Don't re-match when the bearer pass already handled the value — the
+    # remaining `Bearer <REDACTED>` is preserved verbatim.
+    r"(?!Bearer\b)"
+    r"(?P<q>[\"']?)"
+    r"(?P<val>[^\s\"']+)"
+    r"(?P=q)"
+)
+
+# `Authorization: Bearer <token>` and standalone `Bearer <token>`.
+# Optional `Authorization` header prefix is consumed as part of the match so
+# the kv regex can't separately fire on it and clobber `Bearer`.
+_REDACT_BEARER_RE = re.compile(
+    r"(?i)"
+    r"(?P<prefix>(?:Authorization\s*[:=]\s*)?)"
+    r"\b(?P<scheme>Bearer)\s+(?P<token>[A-Za-z0-9._\-+/=]+)"
+)
+
+
 def redact_secrets_from_logs(line: str) -> str:
     """Best-effort masking for `key=value` and `key: value` shaped secrets.
 
@@ -382,44 +423,31 @@ def redact_secrets_from_logs(line: str) -> str:
     sees everything. This helper exists so a chat agent doesn't echo a
     bearer token *back to its own context window* and then quote it in
     the report. Conservative: leave the line alone unless we recognise
-    the key as secret-shaped.
+    the key as secret-shaped *and* a real value follows the operator.
 
-    Handles two shapes:
+    Handles, case-insensitively, with optional spaces around the op and
+    optional surrounding quotes:
 
-    * ``key=value`` — single token, partitioned in place.
-    * ``key: value`` — two tokens (the colon stays attached to the key);
-      we look ahead one token to redact the value.
+    * ``key=value``, ``key = value``
+    * ``key: value``, ``key:value``
+    * ``Bearer <token>`` / ``Authorization: Bearer <token>``
+
+    Does *not* redact `if password is None:` (no value after the op) or
+    `the password algorithm is bcrypt` (no op directly after the key).
     """
-    if "=" not in line and ":" not in line:
+    if "=" not in line and ":" not in line and "bearer" not in line.lower():
         return line
-    tokens = line.split()
-    out: list[str] = []
-    skip_next = False
-    for i, tok in enumerate(tokens):
-        if skip_next:
-            skip_next = False
-            continue
-        # `key=value` — partition once.
-        if "=" in tok:
-            k, _, v = tok.partition("=")
-            if v and _looks_like_secret_key(k):
-                out.append(f"{k}=<redacted>")
-                continue
-        # `key:` plus following value token.
-        if tok.endswith(":") and len(tok) > 1:
-            k = tok[:-1]
-            if _looks_like_secret_key(k) and i + 1 < len(tokens):
-                out.append(f"{k}:<redacted>")
-                skip_next = True
-                continue
-        # `key:value` glued together.
-        if ":" in tok and not tok.endswith(":"):
-            k, _, v = tok.partition(":")
-            if v and _looks_like_secret_key(k):
-                out.append(f"{k}:<redacted>")
-                continue
-        out.append(tok)
-    return " ".join(out)
+
+    def _kv_sub(m: re.Match[str]) -> str:
+        q = m.group("q")
+        return f"{m.group('key')}{m.group('sep')}{q}<REDACTED>{q}"
+
+    def _bearer_sub(m: re.Match[str]) -> str:
+        return f"{m.group('prefix')}{m.group('scheme')} <REDACTED>"
+
+    out = _REDACT_BEARER_RE.sub(_bearer_sub, line)
+    out = _REDACT_KV_RE.sub(_kv_sub, out)
+    return out
 
 
 async def recent_oomkills(api: CoreV1Api, namespace: str, since_min: int = 60) -> list[OOMKill]:

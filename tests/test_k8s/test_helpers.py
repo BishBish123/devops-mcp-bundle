@@ -192,7 +192,7 @@ class TestPodLogsRedaction:
         api.read_namespaced_pod_log.return_value = "starting DB_PASSWORD=hunter2"
         out = await queries.pod_logs(api, "default", "web-0", redact_secrets=True)
         assert "hunter2" not in out[0].line
-        assert "redacted" in out[0].line
+        assert "REDACTED" in out[0].line
 
     async def test_pass_through_when_disabled(self) -> None:
         api = AsyncMock()

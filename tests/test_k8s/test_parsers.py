@@ -108,16 +108,78 @@ class TestRedactSecretsFromLogs:
     def test_redacts_kv_assignment(self) -> None:
         out = queries.redact_secrets_from_logs("starting up DB_PASSWORD=hunter2 log_level=info")
         assert "hunter2" not in out
-        assert "DB_PASSWORD=<redacted>" in out
+        assert "DB_PASSWORD=<REDACTED>" in out
         assert "log_level=info" in out
 
     def test_redacts_yaml_style(self) -> None:
         out = queries.redact_secrets_from_logs("auth_token: abc123 user: bob")
         assert "abc123" not in out
-        assert "auth_token:<redacted>" in out
+        assert "auth_token: <REDACTED>" in out
         # Non-secret keys pass through unchanged.
         assert "user:" in out and "bob" in out
 
     def test_leaves_normal_lines_alone(self) -> None:
         line = "Listening on port 8080"
         assert queries.redact_secrets_from_logs(line) == line
+
+    # --- variants the regex must catch ---
+
+    def test_redacts_password_with_spaces_around_equals(self) -> None:
+        # `password = hunter2` — spaced operator was missed by the v1 splitter.
+        out = queries.redact_secrets_from_logs("config: password = hunter2 done")
+        assert "hunter2" not in out
+        assert "password = <REDACTED>" in out
+
+    def test_redacts_pwd_shorthand(self) -> None:
+        # `pwd:` is a common shorthand key.
+        out = queries.redact_secrets_from_logs("connecting with pwd: hunter2")
+        assert "hunter2" not in out
+        assert "pwd: <REDACTED>" in out
+
+    def test_redacts_quoted_values(self) -> None:
+        # Double-quoted value — quotes survive, value is replaced.
+        out = queries.redact_secrets_from_logs('password="hunter2" extra=1')
+        assert "hunter2" not in out
+        assert 'password="<REDACTED>"' in out
+        # Single-quoted too.
+        out2 = queries.redact_secrets_from_logs("password='hunter2'")
+        assert "hunter2" not in out2
+        assert "password='<REDACTED>'" in out2
+
+    def test_redacts_uppercase_keys(self) -> None:
+        out = queries.redact_secrets_from_logs("PASSWORD: x")
+        assert "PASSWORD: <REDACTED>" in out
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "api_key=abc123",
+            "api-key=abc123",
+            "apiKey=abc123",
+            "API_KEY=abc123",
+        ],
+    )
+    def test_redacts_compound_keys(self, line: str) -> None:
+        # snake / kebab / camel / screaming variants all redact.
+        out = queries.redact_secrets_from_logs(line)
+        assert "abc123" not in out
+        assert "<REDACTED>" in out
+
+    def test_redacts_bearer_token(self) -> None:
+        # Standalone Bearer token inside an Authorization header.
+        out = queries.redact_secrets_from_logs("Authorization: Bearer abc123xyz")
+        assert "abc123xyz" not in out
+        assert "Bearer <REDACTED>" in out
+
+    def test_does_not_redact_negative_check(self) -> None:
+        # `if password is None:` has no operator+value after `password`,
+        # only a stray `:` at the end of the statement — must not mangle.
+        line = "if password is None:"
+        out = queries.redact_secrets_from_logs(line)
+        assert out == line
+
+    def test_does_not_redact_keyword_in_prose(self) -> None:
+        # No `:` or `=` directly following the secret-shaped word — leave alone.
+        line = "the password algorithm is bcrypt"
+        out = queries.redact_secrets_from_logs(line)
+        assert out == line
