@@ -36,9 +36,14 @@ redis-cli --bigkeys --memkeys
 # Memory accounting for one suspect key
 redis-cli MEMORY USAGE "{{ first_key }}" SAMPLES 5
 
-# Compact memory in place (does not evict — just defrags allocator)
-redis-cli MEMORY PURGE
+# Read-only allocator-level diagnostic
+redis-cli MEMORY DOCTOR
 ```
+
+> Fragmentation defrag is intentionally **not** suggested here:
+> `MEMORY PURGE` mutates allocator state and is excluded by the
+> read-only contract. If `mem_fragmentation_ratio > 1.5` and is stable,
+> schedule a rolling restart of the instance instead.
 
 ## What this report does **not** do
 

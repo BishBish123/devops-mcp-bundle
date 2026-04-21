@@ -16,9 +16,28 @@ Produce a triage report that covers:
 
 You **do not** write to Redis. The Postgres MCP server's `run_safe_query`
 contract applies in spirit — every Redis command this skill uses is
-read-only (`INFO`, `MEMORY USAGE`, `OBJECT IDLETIME`, `TTL`,
-`DEBUG OBJECT`, `--bigkeys` is a sampled scan; never `DEL`, `FLUSHDB`,
-`FLUSHALL`, `EXPIRE`).
+read-only:
+
+- `INFO memory|keyspace|persistence|commandstats`
+- `MEMORY USAGE`, `MEMORY STATS`
+- `OBJECT IDLETIME`, `OBJECT ENCODING`, `OBJECT FREQ`
+- `TTL`, `SCAN`
+- `LATENCY DOCTOR`, `MEMORY DOCTOR` (advisory text, no state change)
+- `--bigkeys` (a client-side sampled `SCAN` — safe on prod)
+
+### Commands NOT used (mutating or unsafe)
+
+These commands would violate the read-only contract and never appear in
+the playbook, the recommendations, or the report:
+
+- `MEMORY PURGE` — calls the allocator's purge routine; mutates server
+  state even though it doesn't touch keys. Considered a write.
+- `DEBUG SLEEP` — blocks the event loop on purpose; not safe on prod.
+- `DEBUG OBJECT` — debug-tier and partly deprecated; replaced by
+  `OBJECT ENCODING` + `MEMORY USAGE`.
+- `DEL`, `UNLINK`, `EXPIRE`, `PERSIST` — obviously mutating.
+- `FLUSHDB`, `FLUSHALL` — destructive.
+- `CONFIG SET`, `CONFIG REWRITE` — runtime mutation.
 
 ## Required tools
 
@@ -65,17 +84,21 @@ prefers calling its read-only tools:
    - **Pathologically large** (>1 MB single key): consider sharding,
      splitting into hash-of-hashes, or moving to Postgres.
    - **High fragmentation** (`mem_fragmentation_ratio > 1.5` and stable):
-     not a key problem — issue an `MEMORY PURGE` (it's read-only-ish,
-     it just compacts) or schedule a restart.
+     not a key problem — surface as a recommendation that the operator
+     schedule a rolling restart of the Redis instance during a quiet
+     window. Do **not** suggest `MEMORY PURGE`: even though it leaves
+     the keyspace untouched, it mutates allocator state and is excluded
+     by the read-only contract above.
 
 5. Render the report from `templates/report.md`.
 
 ## Boundaries
 
-- Read-only. The skill never proposes `DEL`, `EXPIRE`, `UNLINK`,
-  `FLUSHDB`, `MEMORY DOCTOR` (gives advice but is fine), or `CONFIG SET`
-  as auto-applied actions. These appear in the report as **suggested**
-  commands the user can run.
+- Read-only. The skill never *runs* `DEL`, `EXPIRE`, `UNLINK`, `FLUSHDB`,
+  `CONFIG SET`, `MEMORY PURGE`, or any other state-changing command. They
+  may appear in the **suggestions** section of the report as actions the
+  user can run themselves; they never appear in the agent's tool calls.
+  `MEMORY DOCTOR` is read-only (it returns advisory text) and is allowed.
 - `--bigkeys` is sampled — it can miss the actual largest key in a
   highly skewed dataset. Note this caveat in the report.
 - `MEMORY USAGE` on a 10M-element list takes seconds. If the user's
