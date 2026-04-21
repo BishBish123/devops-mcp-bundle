@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from importlib import resources
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
@@ -212,6 +213,16 @@ def install(
             "complete before the backend comes up."
         ),
     ),
+    no_warn_empty_env: bool = typer.Option(
+        False,
+        "--no-warn-empty-env",
+        help=(
+            "Suppress the stderr warning emitted when no backend env vars "
+            "are detected and no flags were supplied (every server gets an "
+            "empty `env: {}` block). Pair with scripted installs where the "
+            "wiring step intentionally precedes the configuration step."
+        ),
+    ),
 ) -> None:
     """Wire every server into Claude Code's mcp.json (idempotent).
 
@@ -243,6 +254,22 @@ def install(
         common_env["LOKI_URL"] = loki_url
     if kubeconfig:
         common_env["KUBECONFIG"] = str(kubeconfig.expanduser())
+
+    # Warn when neither flags nor env vars supplied any backend wiring.
+    # The previous behaviour wrote `env: {}` for every server with no
+    # diagnostic — users would restart Claude Code, find nothing
+    # connecting, and have to dig through the JSON to learn why. The
+    # warning is advisory (it does not block the install) and can be
+    # silenced with --no-warn-empty-env for scripted use.
+    if not common_env and not no_warn_empty_env:
+        print(
+            "warning: no env vars detected (POSTGRES_DSN, PROMETHEUS_URL, "
+            "LOKI_URL, KUBECONFIG) and no flags supplied; servers will be "
+            "wired into mcp.json but cannot connect until you set them. "
+            "To suppress: pass --no-warn-empty-env.",
+            file=sys.stderr,
+            flush=True,
+        )
 
     validation_results: list[tuple[str, str, bool, str | None]] = []
     if validate:

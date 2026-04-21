@@ -203,6 +203,56 @@ class TestInstallDryRun:
         assert "postgres-dba" in body["mcpServers"]
 
 
+class TestInstallEmptyEnvWarning:
+    """`install` with no env vars and no flags warns to stderr.
+
+    Before this warning the no-flag invocation silently wrote `env: {}`
+    for every server. Users would restart Claude Code, find nothing
+    connecting, and have to read the JSON to learn why.
+    """
+
+    def _clear_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for var in ("POSTGRES_DSN", "PROMETHEUS_URL", "LOKI_URL", "KUBECONFIG"):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_warns_when_no_env_and_no_flags(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._clear_env(monkeypatch)
+        config = tmp_path / "mcp.json"
+        # mix_stderr=False would split streams, but CliRunner merges by
+        # default and that's enough to assert the message is emitted.
+        result = runner.invoke(app, ["install", "--config", str(config)])
+        assert result.exit_code == 0, result.output
+        assert "no env vars detected" in result.output
+        assert "--no-warn-empty-env" in result.output
+        # Install still completes — the warning is advisory.
+        assert config.exists()
+
+    def test_no_warn_empty_env_suppresses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._clear_env(monkeypatch)
+        config = tmp_path / "mcp.json"
+        result = runner.invoke(
+            app, ["install", "--config", str(config), "--no-warn-empty-env"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "no env vars detected" not in result.output
+
+    def test_no_warning_when_any_env_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Even one env var means the user has started wiring; skip the
+        # warning so it doesn't false-positive on the partial-config case.
+        self._clear_env(monkeypatch)
+        monkeypatch.setenv("POSTGRES_DSN", "postgresql://u:p@h/db")
+        config = tmp_path / "mcp.json"
+        result = runner.invoke(app, ["install", "--config", str(config)])
+        assert result.exit_code == 0, result.output
+        assert "no env vars detected" not in result.output
+
+
 class TestInstallEnvFallback:
     """`install` with no flags should fall back to the standard env vars.
 
