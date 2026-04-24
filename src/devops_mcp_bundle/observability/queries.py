@@ -77,24 +77,50 @@ async def prom_targets(
     right now?") and for the slow-query / pod-debug skills to confirm
     that the cluster's metrics surface is actually healthy before they
     trust a `slo_status` calculation built on top of it.
+
+    Dropped targets matter when service-discovery is misconfigured: a
+    pod the operator *thinks* is being scraped may be in
+    ``droppedTargets`` because a relabel rule kicked it out. The earlier
+    revision only read ``activeTargets``, which silently returned an
+    empty list for ``state="dropped"`` and ``state="any"``.
     """
     if state not in {"active", "dropped", "any"}:
         raise ValueError(f"state must be one of active|dropped|any, got {state!r}")
     resp = await client.get(f"{prom_url}/api/v1/targets", params={"state": state})
     body = _check(resp, "prom_targets")
+    data = body["data"]
     out: list[Target] = []
-    for t in body["data"].get("activeTargets", []):
-        labels = t.get("labels") or {}
-        out.append(
-            Target(
-                job=labels.get("job", ""),
-                instance=labels.get("instance", ""),
-                health=t.get("health", "unknown"),
-                last_scrape=t.get("lastScrape"),
-                last_error=t.get("lastError") or None,
-                scrape_pool=t.get("scrapePool"),
+    if state in {"active", "any"}:
+        for t in data.get("activeTargets", []) or []:
+            labels = t.get("labels") or {}
+            out.append(
+                Target(
+                    job=labels.get("job", ""),
+                    instance=labels.get("instance", ""),
+                    health=t.get("health", "unknown"),
+                    last_scrape=t.get("lastScrape"),
+                    last_error=t.get("lastError") or None,
+                    scrape_pool=t.get("scrapePool"),
+                    origin="active",
+                )
             )
-        )
+    if state in {"dropped", "any"}:
+        # `droppedTargets` carries `discoveredLabels` rather than `labels`,
+        # and has no health / lastScrape / lastError. Coerce into the same
+        # `Target` shape so the caller doesn't have to branch on origin.
+        for t in data.get("droppedTargets", []) or []:
+            labels = t.get("discoveredLabels") or t.get("labels") or {}
+            out.append(
+                Target(
+                    job=labels.get("job", ""),
+                    instance=labels.get("instance", "") or labels.get("__address__", ""),
+                    health="dropped",
+                    last_scrape=None,
+                    last_error=None,
+                    scrape_pool=t.get("scrapePool") or labels.get("__scrape_pool__"),
+                    origin="dropped",
+                )
+            )
     return out
 
 

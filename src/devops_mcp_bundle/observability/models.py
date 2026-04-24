@@ -54,14 +54,22 @@ class WindowDiff(BaseModel):
 
 
 class Target(BaseModel):
-    """A scrape target as returned by `/api/v1/targets`."""
+    """A scrape target as returned by `/api/v1/targets`.
+
+    `health` is preserved verbatim from Prometheus (`up`, `down`,
+    `unknown`) for active targets, or set to `"dropped"` for entries
+    that came from `droppedTargets`. `origin` tells the caller which
+    bucket the entry was in — relevant when `state="any"` returns the
+    union of both lists.
+    """
 
     job: str
     instance: str
-    health: str  # up | down | unknown
+    health: str  # up | down | unknown | dropped
     last_scrape: str | None
     last_error: str | None
     scrape_pool: str | None = None
+    origin: str = "active"  # "active" | "dropped"
 
 
 class BurnRateWindow(BaseModel):

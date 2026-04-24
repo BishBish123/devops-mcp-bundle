@@ -296,6 +296,93 @@ class TestPromTargets:
             await queries.prom_targets(c, PROM, state="any")
         assert captured[0].url.params["state"] == "any"
 
+    async def test_dropped_targets_returned_when_state_dropped(self) -> None:
+        # Mock returns *both* lists; state="dropped" should yield only
+        # the dropped entry. Earlier revision read only activeTargets,
+        # so this caller would silently get an empty list back.
+        body = {
+            "status": "success",
+            "data": {
+                "activeTargets": [
+                    {
+                        "labels": {"job": "api", "instance": "10.0.0.1:9090"},
+                        "health": "up",
+                        "lastScrape": "2026-04-29T03:00:00Z",
+                        "lastError": "",
+                    },
+                ],
+                "droppedTargets": [
+                    {
+                        "discoveredLabels": {
+                            "job": "kube-pods",
+                            "__address__": "10.0.0.99:9090",
+                            "__scrape_pool__": "kubernetes-pods",
+                        }
+                    },
+                ],
+            },
+        }
+        async with _client_with(lambda req: httpx.Response(200, json=body)) as c:
+            targets = await queries.prom_targets(c, PROM, state="dropped")
+        assert len(targets) == 1
+        assert targets[0].origin == "dropped"
+        assert targets[0].health == "dropped"
+        assert targets[0].job == "kube-pods"
+        assert targets[0].instance == "10.0.0.99:9090"
+        assert targets[0].scrape_pool == "kubernetes-pods"
+
+    async def test_any_returns_union(self) -> None:
+        body = {
+            "status": "success",
+            "data": {
+                "activeTargets": [
+                    {
+                        "labels": {"job": "api", "instance": "10.0.0.1:9090"},
+                        "health": "up",
+                        "lastScrape": "2026-04-29T03:00:00Z",
+                        "lastError": "",
+                    },
+                ],
+                "droppedTargets": [
+                    {
+                        "discoveredLabels": {
+                            "job": "kube-pods",
+                            "__address__": "10.0.0.99:9090",
+                        }
+                    },
+                ],
+            },
+        }
+        async with _client_with(lambda req: httpx.Response(200, json=body)) as c:
+            targets = await queries.prom_targets(c, PROM, state="any")
+        assert [t.origin for t in targets] == ["active", "dropped"]
+        # Active entry preserves its real health value.
+        assert targets[0].health == "up"
+        # Dropped entry uses the sentinel.
+        assert targets[1].health == "dropped"
+
+    async def test_unknown_health_passthrough(self) -> None:
+        # The `health` field on an active target is whatever Prometheus
+        # gave us — including the literal string "unknown" — and must
+        # not be silently coerced or dropped.
+        body = {
+            "status": "success",
+            "data": {
+                "activeTargets": [
+                    {
+                        "labels": {"job": "api", "instance": "10.0.0.1:9090"},
+                        "health": "unknown",
+                        "lastScrape": "2026-04-29T03:00:00Z",
+                        "lastError": "",
+                    },
+                ],
+            },
+        }
+        async with _client_with(lambda req: httpx.Response(200, json=body)) as c:
+            targets = await queries.prom_targets(c, PROM)
+        assert targets[0].health == "unknown"
+        assert targets[0].origin == "active"
+
 
 class TestMultiWindowBurnRate:
     async def test_pages_only_when_both_windows_breach(self) -> None:
