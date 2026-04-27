@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from kubernetes_asyncio.client.rest import ApiException
 
 from devops_mcp_bundle.k8s import queries
 
@@ -232,9 +233,30 @@ class TestTopPods:
         assert out[0].memory_bytes == 384 * 1024**2
 
     async def test_metrics_server_missing_returns_empty(self) -> None:
+        # 404 from the metrics.k8s.io endpoint == metrics-server not
+        # installed; the helper degrades to [] so the bench/server stays
+        # functional when the cluster doesn't expose pod metrics.
         api = AsyncMock()
-        api.list_namespaced_custom_object.side_effect = RuntimeError("404")
+        api.list_namespaced_custom_object.side_effect = ApiException(status=404, reason="Not Found")
         assert await queries.top_pods(api, "default") == []
+
+    async def test_rbac_denied_propagates(self) -> None:
+        # An RBAC 403 is *not* a "metrics-server is missing" signal — it
+        # means the service account is misconfigured and the operator
+        # needs to know. The earlier blanket `except Exception` swallowed
+        # this and returned [], hiding the misconfiguration.
+        api = AsyncMock()
+        api.list_namespaced_custom_object.side_effect = ApiException(status=403, reason="Forbidden")
+        with pytest.raises(ApiException):
+            await queries.top_pods(api, "default")
+
+    async def test_unexpected_error_propagates(self) -> None:
+        # Anything that isn't an ApiException(404) propagates so the
+        # caller sees the actual failure mode.
+        api = AsyncMock()
+        api.list_namespaced_custom_object.side_effect = RuntimeError("boom")
+        with pytest.raises(RuntimeError):
+            await queries.top_pods(api, "default")
 
 
 # ---------------------------------------------------------------------------

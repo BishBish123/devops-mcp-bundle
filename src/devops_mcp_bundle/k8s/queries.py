@@ -33,6 +33,13 @@ if TYPE_CHECKING:  # pragma: no cover
         CustomObjectsApi,
     )
 
+# Imported lazily so the bundle stays importable when `kubernetes_asyncio`
+# isn't installed (e.g. in the observability-only deployment shape).
+try:
+    from kubernetes_asyncio.client.rest import ApiException
+except ImportError:  # pragma: no cover
+    ApiException = None  # type: ignore[assignment,misc]
+
 
 def _age_seconds(creation_timestamp: dt.datetime | None) -> int:
     if creation_timestamp is None:
@@ -176,8 +183,11 @@ async def pod_events(api: CoreV1Api, namespace: str, name: str) -> list[Event]:
 async def top_pods(api: CustomObjectsApi, namespace: str) -> list[PodMetric]:
     """Read pod metrics from `metrics.k8s.io/v1beta1` (requires metrics-server).
 
-    Returns [] when metrics-server is not installed (the API call raises),
-    so callers can degrade gracefully.
+    Returns [] when metrics-server is not installed (the custom-object
+    endpoint 404s) or when the kubernetes_asyncio client itself is
+    missing (ImportError). All other failures — RBAC denials (403),
+    API-server outages (5xx), network errors — propagate so the caller
+    sees the actual failure instead of a silent empty list.
     """
     try:
         resp = await api.list_namespaced_custom_object(
@@ -186,10 +196,20 @@ async def top_pods(api: CustomObjectsApi, namespace: str) -> list[PodMetric]:
             namespace=namespace,
             plural="pods",
         )
-    except Exception:
-        # metrics-server is genuinely optional; missing or transient errors
-        # should leave the bench/server functional with empty metrics.
+    except ImportError:
+        # The metrics-server custom-object machinery may try to import
+        # something that isn't installed; treat as "no metrics available".
         return []
+    except Exception as exc:
+        # Only swallow the specific 404 case (metrics-server not installed).
+        # Anything else — 403 RBAC, 5xx, network — must propagate.
+        if (
+            ApiException is not None
+            and isinstance(exc, ApiException)
+            and getattr(exc, "status", None) == 404
+        ):
+            return []
+        raise
     metrics: list[PodMetric] = []
     for item in cast(dict[str, Any], resp).get("items", []):
         name = item["metadata"]["name"]
