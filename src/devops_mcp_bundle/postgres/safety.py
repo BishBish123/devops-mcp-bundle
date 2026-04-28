@@ -215,6 +215,13 @@ def is_read_only_sql(sql: str) -> bool:
     return classify_sql(sql).is_read_only
 
 
+#: Alias of :func:`classify_sql` matching the MCP tool name. The
+#: server exposes this classifier as the ``classify_statement`` tool
+#: (see :mod:`devops_mcp_bundle.postgres.server`); README docs point
+#: at ``classify_statement`` for that reason. Re-export the same
+#: callable from the safety module so a direct
+#: ``from devops_mcp_bundle.postgres.safety import classify_statement``
+#: import works as readers expect.
 def classify_sql(sql: str) -> Classification:
     """Classify `sql` as read-only or not, with a human-readable reason.
 
@@ -331,6 +338,14 @@ def classify_sql(sql: str) -> Classification:
         )
 
     return Classification(True, leading, f"{leading} is read-only")
+
+
+# Backwards-compat / docs-friendly alias. The MCP tool exposed by the
+# postgres server is named ``classify_statement``; the underlying
+# function is ``classify_sql``. Aliasing keeps both spellings importable
+# so a reader following the README's tool list doesn't hit an
+# AttributeError on direct import.
+classify_statement = classify_sql
 
 
 def _normalize_identifier(value: str) -> str:

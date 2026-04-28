@@ -4,7 +4,18 @@ from __future__ import annotations
 
 import pytest
 
-from devops_mcp_bundle.postgres.safety import classify_sql, is_read_only_sql
+from devops_mcp_bundle.postgres.safety import (
+    classify_sql,
+    classify_statement,
+    is_read_only_sql,
+)
+
+
+def test_classify_statement_is_an_alias_of_classify_sql() -> None:
+    # README documents the MCP tool name (`classify_statement`); the
+    # underlying function is `classify_sql`. The alias keeps both
+    # spellings importable so direct-import callers don't trip.
+    assert classify_statement is classify_sql
 
 
 class TestAccept:
