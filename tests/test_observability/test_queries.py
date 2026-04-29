@@ -429,6 +429,116 @@ class TestMultiWindowBurnRate:
             with pytest.raises(ValueError, match="thresholds"):
                 await queries.multi_window_burn_rate(c, PROM, 0.999, "a", "b", long_threshold=-1)
 
+    async def test_threshold_boundary_is_ge(self) -> None:
+        # Burn rate exactly equal to threshold (14.4) is `>=`, so it
+        # *does* breach. This pins the exact boundary semantics — a future
+        # refactor that switches to strict `>` will fail this test.
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=_prom_response("vector", [{"metric": {}, "value": [0, "14.4"]}]),
+            )
+
+        async with _client_with(handler) as c:
+            r = await queries.multi_window_burn_rate(
+                c, PROM, objective=0.999, long_burn_query="long", short_burn_query="short"
+            )
+        assert r.long_window.breaching is True
+        assert r.short_window.breaching is True
+        assert r.page is True
+
+    async def test_all_clear_no_alert(self) -> None:
+        # Both windows well below their thresholds — neither tier fires.
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=_prom_response("vector", [{"metric": {}, "value": [0, "0.5"]}]),
+            )
+
+        async with _client_with(handler) as c:
+            r = await queries.multi_window_burn_rate(
+                c,
+                PROM,
+                objective=0.999,
+                long_burn_query="long",
+                short_burn_query="short",
+                ticket_long_burn_query="t_long",
+                ticket_short_burn_query="t_short",
+            )
+        assert r.page is False
+        assert r.ticket is False
+        assert r.long_window.breaching is False
+        assert r.short_window.breaching is False
+        assert r.ticket_long_window is not None
+        assert r.ticket_long_window.breaching is False
+
+    async def test_ticket_only_does_not_page(self) -> None:
+        # Page tier below 14.4, ticket tier above 6.0 — files a ticket,
+        # does not page.
+        def handler(req: httpx.Request) -> httpx.Response:
+            q = req.url.params["query"]
+            # page-tier queries return 5 (below 14.4); ticket-tier
+            # queries return 7 (above 6.0).
+            value = "7" if q.startswith("t_") else "5"
+            return httpx.Response(
+                200,
+                json=_prom_response("vector", [{"metric": {}, "value": [0, value]}]),
+            )
+
+        async with _client_with(handler) as c:
+            r = await queries.multi_window_burn_rate(
+                c,
+                PROM,
+                objective=0.999,
+                long_burn_query="long",
+                short_burn_query="short",
+                ticket_long_burn_query="t_long",
+                ticket_short_burn_query="t_short",
+            )
+        assert r.page is False
+        assert r.ticket is True
+        assert r.ticket_long_window is not None
+        assert r.ticket_short_window is not None
+        assert r.ticket_long_window.breaching is True
+        assert r.ticket_short_window.breaching is True
+
+    async def test_both_tiers_can_fire(self) -> None:
+        # Severe incident — page *and* ticket fire.
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=_prom_response("vector", [{"metric": {}, "value": [0, "20"]}]),
+            )
+
+        async with _client_with(handler) as c:
+            r = await queries.multi_window_burn_rate(
+                c,
+                PROM,
+                objective=0.999,
+                long_burn_query="long",
+                short_burn_query="short",
+                ticket_long_burn_query="t_long",
+                ticket_short_burn_query="t_short",
+            )
+        assert r.page is True
+        assert r.ticket is True
+
+    async def test_ticket_skipped_when_query_omitted(self) -> None:
+        # No ticket queries supplied — ticket tier is skipped, fields are None.
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=_prom_response("vector", [{"metric": {}, "value": [0, "20"]}]),
+            )
+
+        async with _client_with(handler) as c:
+            r = await queries.multi_window_burn_rate(
+                c, PROM, objective=0.999, long_burn_query="long", short_burn_query="short"
+            )
+        assert r.ticket is False
+        assert r.ticket_long_window is None
+        assert r.ticket_short_window is None
+
 
 class TestEscapeLogqlLabel:
     @pytest.mark.parametrize(
@@ -467,6 +577,23 @@ class TestRenderLogql:
     def test_multiple_placeholders(self) -> None:
         out = queries.render_logql('{{app="{app}", env="{env}"}}', app="api", env="prod")
         assert out == '{app="api", env="prod"}'
+
+    @pytest.mark.parametrize(
+        "bad_key",
+        [
+            "app}",  # `}` would close the matcher
+            "app=",  # `=` is the matcher op character
+            "1app",  # leading digit — not a valid identifier
+            "app key",  # whitespace in the key
+            "app-name",  # dash isn't legal in label keys
+            "",  # empty key
+        ],
+    )
+    def test_invalid_label_key_raises(self, bad_key: str) -> None:
+        # Even a fully-escaped *value* can't save us if the *key* itself
+        # smuggles `}` or `=` past the formatter, so reject up front.
+        with pytest.raises(ValueError, match="LogQL label key"):
+            queries.render_logql("{{{" + bad_key + '="x"}}}', **{bad_key: "x"})
 
 
 class TestRequestParams:

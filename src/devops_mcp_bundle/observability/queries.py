@@ -8,6 +8,7 @@ manages the client lifecycle.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from typing import Any
 
 import httpx
@@ -307,12 +308,19 @@ async def _instant_scalar(client: httpx.AsyncClient, prom_url: str, promql: str)
     return float(series[0].samples[-1].value)
 
 
-# Default burn-rate thresholds from the SRE workbook (page-worthy fast burns).
-# 14.4x for 1h means: at this rate, the 30-day error budget is consumed in
-# (30d / 14.4) ≈ 50h. Couple it with a 5m window so transient blips don't
-# fire the page.
+# Default burn-rate thresholds from the SRE workbook.
+#
+# Page tier (fast burn): 14.4x for 1h means the 30-day error budget would
+# be consumed in (30d / 14.4) ≈ 50h. Couple with a 5m window so a transient
+# blip doesn't fire the page.
+#
+# Ticket tier (slow burn): 6x for 6h means the 30-day budget would be
+# consumed in (30d / 6) = 5d. Couple with a 30m window — a sustained but
+# slower burn that warrants a ticket but not a page.
 _DEFAULT_LONG_THRESHOLD = 14.4
 _DEFAULT_SHORT_THRESHOLD = 14.4
+_DEFAULT_TICKET_LONG_THRESHOLD = 6.0
+_DEFAULT_TICKET_SHORT_THRESHOLD = 6.0
 
 
 async def multi_window_burn_rate(
@@ -325,23 +333,62 @@ async def multi_window_burn_rate(
     short_window: str = "5m",
     long_threshold: float = _DEFAULT_LONG_THRESHOLD,
     short_threshold: float = _DEFAULT_SHORT_THRESHOLD,
+    ticket_long_burn_query: str | None = None,
+    ticket_short_burn_query: str | None = None,
+    ticket_long_window: str = "6h",
+    ticket_short_window: str = "30m",
+    ticket_long_threshold: float = _DEFAULT_TICKET_LONG_THRESHOLD,
+    ticket_short_threshold: float = _DEFAULT_TICKET_SHORT_THRESHOLD,
 ) -> MultiWindowBurnRate:
-    """Evaluate a two-window burn-rate alert.
+    """Evaluate a two-tier multi-window burn-rate alert.
 
-    Returns ``page=True`` only when *both* windows exceed their thresholds —
-    the canonical Google SRE workbook recipe. Caller supplies the PromQL
-    for each burn rate (typically ``error_rate / (1 - objective)`` over the
-    matching window); the helper just compares the values to thresholds.
+    Page tier: fires (``page=True``) only when *both* the 1h and 5m
+    windows exceed the page threshold (14.4x by default).
+
+    Ticket tier (optional): fires (``ticket=True``) only when *both* the
+    6h and 30m windows exceed the ticket threshold (6x by default). Pass
+    ``ticket_long_burn_query`` and ``ticket_short_burn_query`` to enable
+    it; if either is None the ticket tier is skipped and the result has
+    ``ticket=False`` with no ticket-window data.
+
+    Caller supplies the PromQL for each burn rate (typically
+    ``error_rate / (1 - objective)`` over the matching window); the
+    helper just compares values to thresholds.
     """
     if not 0 < objective < 1:
         raise ValueError("objective must be between 0 and 1 (e.g. 0.999)")
     if long_threshold <= 0 or short_threshold <= 0:
+        raise ValueError("thresholds must be positive")
+    if ticket_long_threshold <= 0 or ticket_short_threshold <= 0:
         raise ValueError("thresholds must be positive")
 
     long_val = await _instant_scalar(client, prom_url, long_burn_query)
     short_val = await _instant_scalar(client, prom_url, short_burn_query)
     long_breach = long_val >= long_threshold
     short_breach = short_val >= short_threshold
+
+    ticket_long_window_data: BurnRateWindow | None = None
+    ticket_short_window_data: BurnRateWindow | None = None
+    ticket_fires = False
+    if ticket_long_burn_query is not None and ticket_short_burn_query is not None:
+        t_long_val = await _instant_scalar(client, prom_url, ticket_long_burn_query)
+        t_short_val = await _instant_scalar(client, prom_url, ticket_short_burn_query)
+        t_long_breach = t_long_val >= ticket_long_threshold
+        t_short_breach = t_short_val >= ticket_short_threshold
+        ticket_long_window_data = BurnRateWindow(
+            window=ticket_long_window,
+            burn_rate=t_long_val,
+            threshold=ticket_long_threshold,
+            breaching=t_long_breach,
+        )
+        ticket_short_window_data = BurnRateWindow(
+            window=ticket_short_window,
+            burn_rate=t_short_val,
+            threshold=ticket_short_threshold,
+            breaching=t_short_breach,
+        )
+        ticket_fires = t_long_breach and t_short_breach
+
     return MultiWindowBurnRate(
         objective=objective,
         long_window=BurnRateWindow(
@@ -357,6 +404,9 @@ async def multi_window_burn_rate(
             breaching=short_breach,
         ),
         page=long_breach and short_breach,
+        ticket_long_window=ticket_long_window_data,
+        ticket_short_window=ticket_short_window_data,
+        ticket=ticket_fires,
     )
 
 
@@ -374,6 +424,11 @@ _LOGQL_LABEL_ESCAPES = str.maketrans(
         "\t": "\\t",
     }
 )
+
+# Valid LogQL label name: same shape as a Prometheus label / Go identifier.
+# Anchoring full-match means an injected `}` or `=` in the *key* position of
+# a `render_logql` call is rejected before it ever reaches the formatter.
+_LOGQL_LABEL_KEY_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 def escape_logql_label(value: str) -> str:
@@ -396,8 +451,16 @@ def render_logql(template: str, **labels: str) -> str:
     substitution, so callers can hand in untrusted values without having
     to remember to escape them.
 
+    Label *keys* (the kwargs names) are validated against
+    ``[a-zA-Z_][a-zA-Z0-9_]*`` so a caller can't sneak `}` or `=` into the
+    key position and break out of the matcher. ``ValueError`` on invalid
+    chars; valid key names match Prometheus/LogQL identifier rules.
+
         >>> render_logql('{{app="{app}"}} |= "{needle}"', app="api", needle='oh "no"')
         '{app="api"} |= "oh \\\\"no\\\\""'
     """
+    for key in labels:
+        if not _LOGQL_LABEL_KEY_RE.match(key):
+            raise ValueError(f"invalid LogQL label key {key!r}: must match [a-zA-Z_][a-zA-Z0-9_]*")
     safe = {k: escape_logql_label(v) for k, v in labels.items()}
     return template.format(**safe)

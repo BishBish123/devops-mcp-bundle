@@ -84,13 +84,24 @@ class BurnRateWindow(BaseModel):
 class MultiWindowBurnRate(BaseModel):
     """Multi-window, multi-burn-rate SLO alert evaluation.
 
-    Models the Google SRE workbook recipe: alert only when *both* a long
-    window and a short window are burning above the same threshold. The
-    long window catches sustained burns; the short window keeps the alert
-    from firing on a stale incident that has since recovered.
+    Models the Google SRE workbook recipe with both severity tiers:
+
+    * **Page tier** — fast burn. Default: 14.4x over both 1h and 5m
+      windows. Wakes the on-call.
+    * **Ticket tier** — slow burn. Default: 6x over both 6h and 30m
+      windows. Files a ticket; doesn't page.
+
+    Both tiers fire only when *both* of their windows breach (the
+    long-window catches sustained burns; the short-window keeps the
+    alert from firing on a stale incident that has since recovered).
+    `page` and `ticket` are independent; an incident might breach the
+    ticket tier without ever reaching page-tier severity.
     """
 
     objective: float
     long_window: BurnRateWindow
     short_window: BurnRateWindow
     page: bool
+    ticket_long_window: BurnRateWindow | None = None
+    ticket_short_window: BurnRateWindow | None = None
+    ticket: bool = False
