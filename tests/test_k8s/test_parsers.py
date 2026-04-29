@@ -183,3 +183,31 @@ class TestRedactSecretsFromLogs:
         line = "the password algorithm is bcrypt"
         out = queries.redact_secrets_from_logs(line)
         assert out == line
+
+    def test_does_not_redact_bearer_in_prose(self) -> None:
+        # Standalone "bearer <word>" without Authorization header context AND
+        # with a short alphabetic word after must NOT be treated as a token.
+        # Real tokens are >=16 chars and contain non-letter characters.
+        line = "the bearer token algorithm is oauth2"
+        out = queries.redact_secrets_from_logs(line)
+        assert out == line
+
+    def test_redacts_long_realistic_bearer_jwt_without_header(self) -> None:
+        # JWT-shaped tokens are unambiguous (3 dot-separated base64 segments,
+        # well over 16 chars). Even without the Authorization prefix, they
+        # should be redacted because no English prose looks like this.
+        line = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NSJ9.SflKxwRJ"
+        out = queries.redact_secrets_from_logs(line)
+        assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in out
+        assert "Bearer <REDACTED>" in out
+
+    def test_does_not_redact_short_bearer_word_without_header(self) -> None:
+        # Length anchor: short standalone "Bearer xyz" with no header context
+        # is suspicious but not redacted (would false-positive on prose).
+        # Header-context still redacts even short tokens.
+        prose = "Bearer abc"
+        assert queries.redact_secrets_from_logs(prose) == prose
+        # Same short token WITH Authorization context → redact (header is
+        # unambiguous evidence even when the token is implausibly short).
+        out = queries.redact_secrets_from_logs("Authorization: Bearer abc")
+        assert "Bearer <REDACTED>" in out

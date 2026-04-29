@@ -426,13 +426,24 @@ _REDACT_KV_RE = re.compile(
     r"(?P=q)"
 )
 
-# `Authorization: Bearer <token>` and standalone `Bearer <token>`.
-# Optional `Authorization` header prefix is consumed as part of the match so
-# the kv regex can't separately fire on it and clobber `Bearer`.
-_REDACT_BEARER_RE = re.compile(
+# Two-shape Bearer matcher to avoid false-positives on prose:
+#   (a) `Authorization: Bearer <anything>` — header context is unambiguous
+#   (b) standalone `Bearer <token>` only when the token is realistic
+#       (≥16 chars AND not purely alphabetic — real tokens have digits,
+#       dots, dashes, slashes, etc.). This stops "the bearer token
+#       algorithm is oauth2" from being mangled.
+_REDACT_BEARER_HEADER_RE = re.compile(
     r"(?i)"
-    r"(?P<prefix>(?:Authorization\s*[:=]\s*)?)"
-    r"\b(?P<scheme>Bearer)\s+(?P<token>[A-Za-z0-9._\-+/=]+)"
+    r"(?P<prefix>Authorization\s*[:=]\s*)"
+    r"(?P<scheme>Bearer)\s+(?P<token>[A-Za-z0-9._\-+/=]+)"
+)
+_REDACT_BEARER_STANDALONE_RE = re.compile(
+    r"(?i)"
+    r"\b(?P<scheme>Bearer)\s+"
+    # Token must be ≥16 chars AND must contain at least one non-letter
+    # character (digit/dot/dash/slash/+/=). Pure alphabetic words like
+    # "algorithm" don't qualify.
+    r"(?P<token>(?=[A-Za-z0-9._\-+/=]{16,}\b)[A-Za-z0-9._\-+/=]*[0-9._\-+/=][A-Za-z0-9._\-+/=]*)"
 )
 
 
@@ -462,10 +473,17 @@ def redact_secrets_from_logs(line: str) -> str:
         q = m.group("q")
         return f"{m.group('key')}{m.group('sep')}{q}<REDACTED>{q}"
 
-    def _bearer_sub(m: re.Match[str]) -> str:
+    def _bearer_header_sub(m: re.Match[str]) -> str:
         return f"{m.group('prefix')}{m.group('scheme')} <REDACTED>"
 
-    out = _REDACT_BEARER_RE.sub(_bearer_sub, line)
+    def _bearer_standalone_sub(m: re.Match[str]) -> str:
+        return f"{m.group('scheme')} <REDACTED>"
+
+    # Header-context bearer first (eats the "Authorization:" prefix so the
+    # kv regex can't separately fire on it). Then length-anchored
+    # standalone bearer. Then generic kv pairs.
+    out = _REDACT_BEARER_HEADER_RE.sub(_bearer_header_sub, line)
+    out = _REDACT_BEARER_STANDALONE_RE.sub(_bearer_standalone_sub, out)
     out = _REDACT_KV_RE.sub(_kv_sub, out)
     return out
 
