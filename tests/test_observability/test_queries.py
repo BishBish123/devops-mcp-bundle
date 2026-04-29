@@ -447,6 +447,40 @@ class TestMultiWindowBurnRate:
         assert r.short_window.breaching is True
         assert r.page is True
 
+    async def test_ticket_threshold_boundary_is_ge(self) -> None:
+        # Symmetric to test_threshold_boundary_is_ge but for the ticket
+        # tier (6.0). Burn rate exactly == 6.0 must trigger the ticket
+        # alert because the comparison is `>=`. Pins ticket-tier
+        # boundary semantics.
+        def handler(req: httpx.Request) -> httpx.Response:
+            q = req.url.params["query"]
+            # Page-tier queries return well-below page threshold (1) so
+            # only the ticket tier is in play. Ticket-tier queries return
+            # exactly 6.0 — the boundary.
+            value = "6.0" if q.startswith("t_") else "1"
+            return httpx.Response(
+                200,
+                json=_prom_response("vector", [{"metric": {}, "value": [0, value]}]),
+            )
+
+        async with _client_with(handler) as c:
+            r = await queries.multi_window_burn_rate(
+                c,
+                PROM,
+                objective=0.999,
+                long_burn_query="long",
+                short_burn_query="short",
+                ticket_long_burn_query="t_long",
+                ticket_short_burn_query="t_short",
+            )
+        # Ticket fires at exactly 6.0 (>=), page does not fire at 1.0.
+        assert r.ticket is True
+        assert r.page is False
+        assert r.ticket_long_window is not None
+        assert r.ticket_short_window is not None
+        assert r.ticket_long_window.breaching is True
+        assert r.ticket_short_window.breaching is True
+
     async def test_all_clear_no_alert(self) -> None:
         # Both windows well below their thresholds — neither tier fires.
         def handler(req: httpx.Request) -> httpx.Response:
