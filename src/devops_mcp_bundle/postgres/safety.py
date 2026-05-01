@@ -149,4 +149,23 @@ def classify_sql(sql: str) -> Classification:
         if token.ttype is Keyword and kw == "ANALYZE":
             return Classification(False, leading, "ANALYZE updates planner statistics (a write)")
 
+    # SELECT ... INTO creates a new table (the Postgres equivalent of
+    # CREATE TABLE AS). The leading-keyword check sees SELECT and waves
+    # it through; only by walking the flattened token stream can we spot
+    # the trailing INTO modifier. The DB-side
+    # `default_transaction_read_only` flag would also catch this, but
+    # defense-in-depth is the whole point of the classifier.
+    #
+    # `INTO` only appears as a Token.Keyword when it's a real clause —
+    # inside a string literal (`SELECT 'foo into bar'`) it's tagged
+    # Literal.String, so this scan is precise.
+    if leading in ("SELECT", "WITH"):
+        for token in stmt.flatten():  # type: ignore[no-untyped-call]
+            if token.ttype is Keyword and token.normalized.upper() == "INTO":
+                return Classification(
+                    False,
+                    leading,
+                    "SELECT ... INTO creates a new table; not allowed in read-only mode",
+                )
+
     return Classification(True, leading, f"{leading} is read-only")

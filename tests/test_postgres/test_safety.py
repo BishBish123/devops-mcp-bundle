@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from devops_mcp_bundle.postgres.safety import is_read_only_sql
+from devops_mcp_bundle.postgres.safety import classify_sql, is_read_only_sql
 
 
 class TestAccept:
@@ -129,3 +129,24 @@ class TestExoticRejected:
     )
     def test_rejected(self, sql: str) -> None:
         assert not is_read_only_sql(sql), f"should refuse: {sql!r}"
+
+    def test_select_into_rejected(self) -> None:
+        # `SELECT * INTO newtab FROM users` is the Postgres CREATE-TABLE-AS
+        # shorthand. The leading keyword is SELECT (which would otherwise
+        # be allowed); the classifier has to look at the body to spot it.
+        c = classify_sql("SELECT * INTO newtab FROM users")
+        assert c.is_read_only is False
+        assert "INTO" in c.reason
+
+    def test_cte_with_inner_select_into_rejected(self) -> None:
+        # CTE-prefixed variant: the leading keyword is WITH, but the
+        # outer query still creates a new table.
+        c = classify_sql("WITH x AS (SELECT 1) SELECT * INTO out FROM x")
+        assert c.is_read_only is False
+        assert "INTO" in c.reason
+
+    def test_select_with_inner_into_keyword_in_string_allowed(self) -> None:
+        # The substring "into" inside a string literal is tagged as
+        # Literal.String by sqlparse, not Keyword — so the body-scan
+        # for INTO must not fire here.
+        assert is_read_only_sql("SELECT 'foo into bar'::text")
