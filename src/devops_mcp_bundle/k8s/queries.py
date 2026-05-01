@@ -564,10 +564,34 @@ def redact_secrets_from_logs(line: str) -> str:
 
 
 async def recent_oomkills(api: CoreV1Api, namespace: str, since_min: int = 60) -> list[OOMKill]:
-    """Return Warning events whose reason contains 'OOMKill' within `since_min`."""
+    """Return Warning events whose reason contains 'OOMKill' within `since_min`.
+
+    Caps the upstream fetch at ``MAX_K8S_EVENTS`` so a Warning-event-heavy
+    namespace (e.g. a flapping deployment producing ``FailedScheduling``
+    events at high rate) cannot OOM the agent during materialisation
+    before the OOM-keyword filter ever runs.
+
+    If the upstream returns at the cap, the OOMKill picture is potentially
+    incomplete — silently truncating would let an agent conclude "no
+    recent OOMKills" when in fact older OOMKills were dropped past the
+    cap. We mirror the sibling ``namespace_events`` contract here:
+    raise so the caller learns to shorten ``since_min`` or filter by
+    namespace, rather than acting on a partial answer.
+    """
     if since_min <= 0:
         raise ValueError("since_min must be positive")
-    resp = await api.list_namespaced_event(namespace=namespace, field_selector="type=Warning", _request_timeout=_K8S_REQUEST_TIMEOUT)
+    resp = await api.list_namespaced_event(
+        namespace=namespace,
+        field_selector="type=Warning",
+        limit=MAX_K8S_EVENTS,
+        _request_timeout=_K8S_REQUEST_TIMEOUT,
+    )
+    if len(resp.items) >= MAX_K8S_EVENTS:
+        raise ValueError(
+            f"recent_oomkills: upstream returned {len(resp.items)} Warning entries, "
+            f"hits cap MAX_K8S_EVENTS={MAX_K8S_EVENTS}; shorten since_min or "
+            "narrow the namespace — silently truncating would hide older OOMKills"
+        )
     cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=since_min)
     out: list[OOMKill] = []
     for e in resp.items:

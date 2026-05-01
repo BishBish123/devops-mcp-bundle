@@ -379,3 +379,81 @@ class TestNamespaceEventsLimit:
         api = AsyncMock()
         with pytest.raises(ValueError, match="MAX_K8S_EVENTS"):
             await queries.namespace_events(api, "default", limit=queries.MAX_K8S_EVENTS + 1)
+
+
+class TestRecentOomkillsLimitsFetch:
+    """``recent_oomkills`` must cap the upstream event fetch at
+    ``MAX_K8S_EVENTS`` so a Warning-event-heavy namespace cannot OOM
+    the agent during materialisation before the OOM-keyword filter
+    runs. Sibling ``namespace_events`` has had this cap since v1; the
+    OOM helper missed it until round-5.
+    """
+
+    async def test_passes_limit_to_api(self) -> None:
+        api = AsyncMock()
+        api.list_namespaced_event.return_value = _ns(items=[])
+        await queries.recent_oomkills(api, "default", since_min=60)
+        call_kwargs = api.list_namespaced_event.call_args.kwargs
+        assert call_kwargs.get("limit") == queries.MAX_K8S_EVENTS, (
+            "recent_oomkills must forward limit= to list_namespaced_event so "
+            "the kube-apiserver caps the response size before the Python-side "
+            "OOM-keyword filter runs"
+        )
+
+    async def test_passes_field_selector_warning(self) -> None:
+        # Pin the field selector too — narrowing to type=Warning at the
+        # apiserver is part of the same "don't materialise the firehose"
+        # contract as the limit.
+        api = AsyncMock()
+        api.list_namespaced_event.return_value = _ns(items=[])
+        await queries.recent_oomkills(api, "default", since_min=60)
+        call_kwargs = api.list_namespaced_event.call_args.kwargs
+        assert call_kwargs.get("field_selector") == "type=Warning"
+
+
+class TestRecentOomkillsRaisesAtCap:
+    """If the upstream returns ``MAX_K8S_EVENTS`` warnings, we have no
+    way to know whether older OOMKills were truncated. Silently
+    serving the partial answer would let an agent conclude "no recent
+    OOMKills" on a Warning-flooded namespace where the OOM events are
+    older than the most recent 1000 entries. Round-5-redux (codex
+    cross-check) raises instead, mirroring sibling ``namespace_events``.
+    """
+
+    async def test_at_cap_raises(self) -> None:
+        # Build a synthetic response with exactly MAX_K8S_EVENTS items
+        # — none of them OOM — to force the truncation guard before
+        # the keyword filter runs.
+        api = AsyncMock()
+        items = [
+            _ns(
+                type="Warning",
+                reason="FailedScheduling",
+                message="...",
+                last_timestamp=_utc(30),
+                event_time=None,
+                involved_object=_ns(kind="Pod", name=f"p{i}", field_path=""),
+            )
+            for i in range(queries.MAX_K8S_EVENTS)
+        ]
+        api.list_namespaced_event.return_value = _ns(items=items)
+        with pytest.raises(ValueError, match="MAX_K8S_EVENTS"):
+            await queries.recent_oomkills(api, "default", since_min=60)
+
+    async def test_below_cap_returns_normally(self) -> None:
+        # One short of the cap returns the (possibly empty) filtered list.
+        api = AsyncMock()
+        items = [
+            _ns(
+                type="Warning",
+                reason="FailedScheduling",
+                message="...",
+                last_timestamp=_utc(30),
+                event_time=None,
+                involved_object=_ns(kind="Pod", name=f"p{i}", field_path=""),
+            )
+            for i in range(queries.MAX_K8S_EVENTS - 1)
+        ]
+        api.list_namespaced_event.return_value = _ns(items=items)
+        out = await queries.recent_oomkills(api, "default", since_min=60)
+        assert out == []  # no OOM keywords in any reason
