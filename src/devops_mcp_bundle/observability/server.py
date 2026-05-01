@@ -92,8 +92,26 @@ async def multi_window_burn_rate(
     short_window: str = "5m",
     long_threshold: float = 14.4,
     short_threshold: float = 14.4,
+    ticket_long_burn_query: str | None = None,
+    ticket_short_burn_query: str | None = None,
+    ticket_long_window: str = "6h",
+    ticket_short_window: str = "30m",
+    ticket_long_threshold: float = 6.0,
+    ticket_short_threshold: float = 6.0,
 ) -> MultiWindowBurnRate:
-    """Evaluate a Google SRE-workbook two-window burn-rate alert."""
+    """Evaluate a Google SRE-workbook two-tier burn-rate alert.
+
+    Page tier (always evaluated): fires when *both* the long and short
+    page windows exceed the page threshold (14.4x default for a 99.9 %
+    SLO). Defaults match the workbook: 1h + 5m, threshold 14.4.
+
+    Ticket tier (optional): pass ``ticket_long_burn_query`` and
+    ``ticket_short_burn_query`` to enable it. Fires when *both* the
+    long and short ticket windows exceed the ticket threshold (6x
+    default). Defaults: 6h + 30m, threshold 6.0. If either ticket
+    query is omitted, the ticket tier is skipped and the result has
+    ``ticket=False`` with no ticket-window data.
+    """
     async with _client() as c:
         return await queries.multi_window_burn_rate(
             c,
@@ -105,6 +123,12 @@ async def multi_window_burn_rate(
             short_window=short_window,
             long_threshold=long_threshold,
             short_threshold=short_threshold,
+            ticket_long_burn_query=ticket_long_burn_query,
+            ticket_short_burn_query=ticket_short_burn_query,
+            ticket_long_window=ticket_long_window,
+            ticket_short_window=ticket_short_window,
+            ticket_long_threshold=ticket_long_threshold,
+            ticket_short_threshold=ticket_short_threshold,
         )
 
 
