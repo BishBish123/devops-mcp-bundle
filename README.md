@@ -289,6 +289,31 @@ install.sh       one-line installer for end users
   - [`0004`](docs/adr/0004-loki-vs-cloudwatch-logs.md) —
     Loki as the log backend; not CloudWatch
 
+## Contributing — GitHub Actions SHA pinning
+
+The CI workflows in `.github/workflows/` currently use placeholder SHAs
+(`PLACEHOLDER_SHA`) for third-party actions (`actions/checkout`,
+`astral-sh/setup-uv`). Before the next release, replace each placeholder
+with the real commit SHA for the corresponding tag:
+
+```bash
+# Find the SHA for actions/checkout@v4:
+git ls-remote https://github.com/actions/checkout refs/tags/v4
+
+# Find the SHA for astral-sh/setup-uv@v3:
+git ls-remote https://github.com/astral-sh/setup-uv refs/tags/v3
+```
+
+Then update the `uses:` lines in the workflow files:
+
+```yaml
+- uses: actions/checkout@<sha>  # v4
+- uses: astral-sh/setup-uv@<sha>  # v3
+```
+
+This protects against a tag being silently moved to a different (potentially
+malicious) commit after the workflow was reviewed.
+
 ## Pre-commit (optional)
 
 A `.pre-commit-config.yaml` ships with the repo. To enable:
