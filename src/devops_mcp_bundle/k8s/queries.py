@@ -150,7 +150,8 @@ async def pod_logs(
     # `container` is optional in the API even though the stub types it as
     # `str`; pass `""` to mean "default container".
     text = await api.read_namespaced_pod_log(
-        name=name, namespace=namespace, container=container or "", tail_lines=tail
+        name=name, namespace=namespace, container=container or "", tail_lines=tail,
+        _request_timeout=30,
     )
     if not text:
         return []

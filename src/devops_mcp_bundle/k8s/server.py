@@ -44,14 +44,24 @@ mcp: FastMCP = FastMCP(
 
 @asynccontextmanager
 async def _api() -> AsyncIterator[tuple[object, object]]:
-    """Yield (CoreV1Api, CustomObjectsApi) configured from env or kubeconfig."""
+    """Yield (CoreV1Api, CustomObjectsApi) configured from env or kubeconfig.
+
+    A global ``urllib3_request_timeout`` of ``(5, 30)`` (connect=5s,
+    read=30s) is set on the Configuration before the ApiClient is created.
+    This prevents a hung kube-apiserver (e.g. during a network partition)
+    from stalling the MCP server indefinitely. Individual API calls may
+    still pass ``_request_timeout`` to override for that specific call.
+    """
     from kubernetes_asyncio import client, config  # noqa: PLC0415
 
     if os.environ.get("KUBERNETES_SERVICE_HOST"):
         config.load_incluster_config()  # type: ignore[no-untyped-call]
     else:
         await config.load_kube_config()
-    api_client = client.ApiClient()
+    # Set a global default timeout: 5 s connect, 30 s read.
+    configuration = client.Configuration()
+    configuration.urllib3_request_timeout = (5, 30)
+    api_client = client.ApiClient(configuration=configuration)
     try:
         yield client.CoreV1Api(api_client), client.CustomObjectsApi(api_client)
     finally:
