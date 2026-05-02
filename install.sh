@@ -17,7 +17,12 @@ set -euo pipefail
 # or a local checkout.
 
 VENV="${HOME}/.local/share/devops-mcp-bundle"
-PIP_SOURCE="${PIP_SOURCE:-git+https://github.com/BishBish123/devops-mcp-bundle.git}"
+# Default to the pinned stable release.  Override INSTALL_REF to install a
+# different tag, branch, or commit:
+#   INSTALL_REF=main bash install.sh         # latest (bleeding-edge)
+#   INSTALL_REF=v0.2.0 bash install.sh       # a future release
+INSTALL_REF="${INSTALL_REF:-v0.1.0}"
+PIP_SOURCE="${PIP_SOURCE:-git+https://github.com/BishBish123/devops-mcp-bundle.git@${INSTALL_REF}}"
 # Allow callers to point us at a specific interpreter — Homebrew's
 # `python3` is 3.13 today, and macOS still ships 3.9 as the system
 # `python3`. Both are outside our supported range; rather than fail

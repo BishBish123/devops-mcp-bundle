@@ -71,3 +71,23 @@ the LLM seeing query texts.
   attempt to scrub PII from query results or log lines. If your data
   is sensitive enough that the LLM seeing it is a concern, scope the
   read-only role to a non-sensitive view.
+
+## curl | bash tradeoffs
+
+The one-line installer (`curl -fsSL ... | bash`) is convenient but carries
+inherent risks you should understand before using it in production or on a
+machine with elevated privileges:
+
+- **No integrity check.** The script is fetched over HTTPS, which prevents
+  passive interception, but provides no guarantee that the server serving
+  the script has not been compromised. A SHA-256 sum pinned out-of-band
+  (e.g. in a corporate run-book) provides a stronger guarantee.
+- **Pinned by default.** `install.sh` defaults to `INSTALL_REF=v0.1.0` so
+  re-running the installer does not silently pick up a new version. Verify
+  the tag with `git show v0.1.0` from a trusted clone before installing.
+- **Bleeding-edge opt-in.** Pass `INSTALL_REF=main` to track the tip of the
+  default branch. Do not do this in production — `main` can introduce
+  breaking changes between commits.
+- **Safer alternatives.** For environments where curl | bash is unacceptable,
+  clone the repo, inspect the code, then install with
+  `uv tool install git+https://github.com/BishBish123/devops-mcp-bundle.git@v0.1.0`.

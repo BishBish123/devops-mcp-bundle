@@ -53,9 +53,12 @@ interpreter explicitly: `PYTHON=/opt/homebrew/opt/python@3.12/bin/python3.12 bas
 ## Install
 
 ```bash
-# one-line installer (creates a venv at ~/.local/share/devops-mcp-bundle
-# and installs from this repo via `pip install git+https://...`)
+# one-line installer (creates a venv at ~/.local/share/devops-mcp-bundle).
+# Defaults to the pinned stable release v0.1.0.
 curl -fsSL https://raw.githubusercontent.com/BishBish123/devops-mcp-bundle/main/install.sh | bash
+
+# Install a specific tag or branch:
+INSTALL_REF=main bash <(curl -fsSL https://raw.githubusercontent.com/BishBish123/devops-mcp-bundle/main/install.sh)
 
 # or, manually from a checkout:
 git clone https://github.com/BishBish123/devops-mcp-bundle
