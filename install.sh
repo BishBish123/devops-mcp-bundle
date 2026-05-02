@@ -7,13 +7,17 @@ set -euo pipefail
 #   curl -fsSL https://raw.githubusercontent.com/BishBish123/devops-mcp-bundle/main/install.sh | bash
 #
 # What it does (all idempotent):
-#   1. Verifies python ≥ 3.11 + pip / uv on PATH
+#   1. Verifies python ≥ 3.11 on PATH
 #   2. Installs the package into an isolated venv at ~/.local/share/devops-mcp-bundle
-#   3. Prepends ~/.local/share/devops-mcp-bundle/bin to PATH for the calling shell
-#   4. Runs `devops-mcp install --dry-run` so the user sees the resulting mcp.json
+#   3. Symlinks the four console scripts into ~/.local/bin
+#   4. Tells the user how to wire everything into Claude Code's mcp.json
+#
+# The package is installed from the GitHub repo until v1.0 lands on
+# PyPI. Override with PIP_SOURCE=<spec> to install from a fork, a tag,
+# or a local checkout.
 
 VENV="${HOME}/.local/share/devops-mcp-bundle"
-PIP_PKG="devops-mcp-bundle"
+PIP_SOURCE="${PIP_SOURCE:-git+https://github.com/BishBish123/devops-mcp-bundle.git}"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m✓\033[0m %s\n'  "$*"; }
@@ -36,10 +40,10 @@ fi
 "$VENV/bin/pip" install --upgrade pip >/dev/null
 ok "venv ready"
 
-bold "installing $PIP_PKG"
-"$VENV/bin/pip" install --upgrade "$PIP_PKG" >/dev/null \
-    || die "pip install failed (note: published-to-PyPI step is post-1.0; for now: pip install -e <local-checkout>)"
-ok "$PIP_PKG installed"
+bold "installing devops-mcp-bundle from $PIP_SOURCE"
+"$VENV/bin/pip" install --upgrade "$PIP_SOURCE" >/dev/null \
+    || die "pip install failed — try PIP_SOURCE=<your-spec> $0 (e.g. a local checkout, a tag, or a fork)"
+ok "devops-mcp-bundle installed"
 
 LINK_DIR="${HOME}/.local/bin"
 mkdir -p "$LINK_DIR"

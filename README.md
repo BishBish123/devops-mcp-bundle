@@ -33,14 +33,21 @@ the right thing — see `skills/<name>/EVAL.md`.
 ## Install
 
 ```bash
-# one-line installer (creates a venv at ~/.local/share/devops-mcp-bundle)
+# one-line installer (creates a venv at ~/.local/share/devops-mcp-bundle
+# and installs from this repo via `pip install git+https://...`)
 curl -fsSL https://raw.githubusercontent.com/BishBish123/devops-mcp-bundle/main/install.sh | bash
 
-# or, manually:
-uv tool install devops-mcp-bundle      # once published to PyPI
-# until then:
-git clone https://github.com/BishBish123/devops-mcp-bundle && cd devops-mcp-bundle && uv sync
+# or, manually from a checkout:
+git clone https://github.com/BishBish123/devops-mcp-bundle
+cd devops-mcp-bundle && uv sync
+
+# or directly from git (no clone):
+uv pip install git+https://github.com/BishBish123/devops-mcp-bundle.git
 ```
+
+PyPI publishing lands with v1.0; until then install from the git URL
+above. The installer respects `PIP_SOURCE` if you need to point it at
+a fork or a tag.
 
 Then wire the bundle into Claude Code's `mcp.json`:
 
