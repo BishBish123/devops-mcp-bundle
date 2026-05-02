@@ -7,6 +7,7 @@ import os
 import shutil
 from importlib import resources
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 import anyio
 import asyncpg
@@ -16,6 +17,36 @@ from rich.console import Console
 from rich.table import Table
 
 from devops_mcp_bundle import __version__
+
+
+def _redact_dsn(dsn: str) -> str:
+    """Return `dsn` with the password component replaced by '***'.
+
+    Works for both DSNs (``postgresql://user:pass@host/db``) and plain
+    HTTP/HTTPS URLs (``http://user:pass@host``). If there is no userinfo
+    or the userinfo has no password the string is returned unchanged.
+    If ``dsn`` is not parseable as a URL it is returned unchanged.
+
+    >>> _redact_dsn("postgresql://alice:hunter2@db:5432/prod")
+    'postgresql://alice:***@db:5432/prod'
+    >>> _redact_dsn("http://prometheus:9090")
+    'http://prometheus:9090'
+    >>> _redact_dsn("not-a-url")
+    'not-a-url'
+    """
+    try:
+        parsed = urlparse(dsn)
+    except Exception:
+        return dsn
+    if not parsed.password:
+        return dsn
+    # Rebuild netloc with the password masked.
+    user = parsed.username or ""
+    host = parsed.hostname or ""
+    port_part = f":{parsed.port}" if parsed.port else ""
+    masked_netloc = f"{user}:***@{host}{port_part}"
+    return urlunparse(parsed._replace(netloc=masked_netloc))
+
 
 app = typer.Typer(
     name="devops-mcp",
@@ -269,27 +300,30 @@ def _validate_backends(
             finally:
                 await conn.close()
 
+        safe_dsn = _redact_dsn(pgvector_dsn)
         try:
             anyio.run(_probe_pg)
-            results.append(("postgres", pgvector_dsn, True, None))
+            results.append(("postgres", safe_dsn, True, None))
         except Exception as e:
-            results.append(("postgres", pgvector_dsn, False, str(e)))
+            results.append(("postgres", safe_dsn, False, str(e)))
 
     if prometheus_url:
+        safe_prom = _redact_dsn(prometheus_url)
         try:
             r = httpx.get(f"{prometheus_url.rstrip('/')}/-/healthy", timeout=5.0)
             r.raise_for_status()
-            results.append(("prometheus", prometheus_url, True, None))
+            results.append(("prometheus", safe_prom, True, None))
         except Exception as e:
-            results.append(("prometheus", prometheus_url, False, str(e)))
+            results.append(("prometheus", safe_prom, False, str(e)))
 
     if loki_url:
+        safe_loki = _redact_dsn(loki_url)
         try:
             r = httpx.get(f"{loki_url.rstrip('/')}/ready", timeout=5.0)
             r.raise_for_status()
-            results.append(("loki", loki_url, True, None))
+            results.append(("loki", safe_loki, True, None))
         except Exception as e:
-            results.append(("loki", loki_url, False, str(e)))
+            results.append(("loki", safe_loki, False, str(e)))
 
     return results
 

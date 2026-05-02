@@ -18,7 +18,7 @@ import pytest
 from typer.testing import CliRunner
 
 from devops_mcp_bundle import cli as cli_module
-from devops_mcp_bundle.cli import app
+from devops_mcp_bundle.cli import _redact_dsn, app
 
 runner = CliRunner()
 
@@ -315,3 +315,38 @@ def test_help_for_each_subcommand(cmd: str) -> None:
     """Every subcommand should have --help that exits clean."""
     result = runner.invoke(app, [cmd, "--help"])
     assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# FIX 5 — _redact_dsn masks passwords in DSN / URL strings
+# ---------------------------------------------------------------------------
+
+
+class TestRedactDsn:
+    def test_redact_dsn_masks_password(self) -> None:
+        result = _redact_dsn("postgresql://alice:hunter2@db.example.com:5432/prod")
+        assert "hunter2" not in result
+        assert "alice" in result
+        assert "***" in result
+        assert "db.example.com" in result
+        assert "5432" in result
+
+    def test_redact_dsn_handles_no_password(self) -> None:
+        # URL with username but no password — returned unchanged.
+        url = "http://prometheus:9090"
+        assert _redact_dsn(url) == url
+
+    def test_redact_dsn_handles_no_userinfo(self) -> None:
+        # Plain URL with no credentials — returned as-is.
+        url = "http://localhost:3100"
+        assert _redact_dsn(url) == url
+
+    def test_redact_dsn_handles_unparseable(self) -> None:
+        # Non-URL strings must not raise; return as-is.
+        assert _redact_dsn("not-a-url") == "not-a-url"
+
+    def test_redact_dsn_http_with_credentials(self) -> None:
+        result = _redact_dsn("http://user:s3cr3t@internalhost:9090")
+        assert "s3cr3t" not in result
+        assert "user" in result
+        assert "***" in result
