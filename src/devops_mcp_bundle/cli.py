@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from importlib import resources
 from pathlib import Path
 
 import typer
@@ -63,8 +64,8 @@ def list_servers() -> None:
 @app.command()
 def list_skills() -> None:
     """List the Claude Code Skills shipped in this bundle."""
-    skills_root = Path(__file__).resolve().parent.parent.parent / "skills"
-    if not skills_root.exists():
+    skills_root = _find_skills_root()
+    if skills_root is None:
         console.print("[yellow]skills/ not found in this install — see the source repo.[/]")
         return
     table = Table(title="Skills")
@@ -85,6 +86,35 @@ def list_skills() -> None:
                     break
         table.add_row(skill_dir.name, desc)
     console.print(table)
+
+
+def _find_skills_root() -> Path | None:
+    """Locate the SKILL.md tree, preferring the packaged copy.
+
+    The wheel ships skills at ``devops_mcp_bundle/skills/`` (see the
+    hatch ``force-include`` block in ``pyproject.toml``). For editable
+    installs and source-tree runs that path doesn't exist; fall back
+    to the repo's top-level ``skills/`` directory two parents up from
+    this file.
+    """
+    try:
+        packaged = resources.files("devops_mcp_bundle").joinpath("skills")
+        # `resources.files` always returns a Traversable, but the
+        # `skills/` subpath only exists when hatch's force-include
+        # actually populated it (i.e. installed-from-wheel, not
+        # editable). Convert to a real path so the rest of the
+        # function can use Pathlib uniformly.
+        if packaged.is_dir():
+            return Path(str(packaged))
+    except (ModuleNotFoundError, FileNotFoundError):  # pragma: no cover
+        pass
+
+    # Editable / source-tree fallback: <repo>/skills/.
+    source_root = Path(__file__).resolve().parent.parent.parent / "skills"
+    if source_root.is_dir():
+        return source_root
+
+    return None
 
 
 @app.command()

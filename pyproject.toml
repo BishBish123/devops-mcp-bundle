@@ -63,6 +63,29 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/devops_mcp_bundle"]
 
+# Ship the Skills pack inside the wheel so installed users get it, not
+# just developers working off the repo. The skills/ tree stays at the
+# repo root (README + ARCHITECTURE link to it that way); hatch copies
+# it into the package as `devops_mcp_bundle/skills/` at build time.
+# Discovery in cli.py uses `importlib.resources` to find skills inside
+# the installed package; for editable / source-tree runs it falls back
+# to the repo's top-level `skills/` directory.
+[tool.hatch.build.targets.wheel.force-include]
+"skills" = "devops_mcp_bundle/skills"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/**/*",
+    "skills/**/*",
+    "tests/**/*",
+    "docs/**/*",
+    "*.md",
+    "LICENSE",
+    "Makefile",
+    "install.sh",
+    "pyproject.toml",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
