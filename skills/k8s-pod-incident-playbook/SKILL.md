@@ -17,6 +17,10 @@ action, surface the `kubectl` command for them to run.
 
 ## Required tools (Kubernetes MCP server)
 
+- `list_pods(namespace, label_selector=None)` — `restart_count` and
+  `ready` per pod. EVAL.md requires the report to state these, and
+  they live on the `Pod` shape from `list_pods` — `describe_pod`
+  returns a `PodSpec` that doesn't include them.
 - `describe_pod(namespace, name)` — phase, conditions, container images,
   resource requests/limits, labels.
 - `pod_events(namespace, name)` — every event the API has for the object.
@@ -28,29 +32,36 @@ action, surface the `kubectl` command for them to run.
 
 ## Playbook
 
-1. `describe_pod` first. Note the phase. If it's `Pending`, the answer is
+1. `list_pods(namespace)` first to capture `restart_count` and `ready`
+   for the target pod (the report has to state both — see EVAL.md).
+   `describe_pod` returns a `PodSpec` that doesn't include either, so
+   skipping this step means going back to the API later. If `ready`
+   is true and `restart_count` is 0, the report says "pod looks
+   healthy" and stops — no fishing.
+
+2. `describe_pod` next. Note the phase. If it's `Pending`, the answer is
    almost certainly in `pod_events` — skip ahead.
 
-2. `pod_events`. Group by reason. Pay special attention to:
+3. `pod_events`. Group by reason. Pay special attention to:
    - `FailedScheduling` — node-selector / affinity / resource-pressure issue.
    - `BackOff`, `CrashLoopBackOff` — application bug or misconfig; pull logs.
    - `Unhealthy` — failing readiness probe; pull logs.
    - `OOMKilling`, `OOMKilled` — memory limit too tight or memory leak.
    - `FailedMount` — PVC / secret missing.
 
-3. `recent_oomkills(namespace, since_min=60)`. If the pod is in this list,
+4. `recent_oomkills(namespace, since_min=60)`. If the pod is in this list,
    the report's hypothesis is *insufficient memory limit OR memory leak*.
    Recommend tightening + log-grepping for the leak signature.
 
-4. For each container in the pod spec, `pod_logs(..., container=<name>,
+5. For each container in the pod spec, `pod_logs(..., container=<name>,
    tail=200)`. Look for stack traces, panics, "connection refused",
    "could not connect", "out of memory".
 
-5. If `top_pods` works (metrics-server installed), include the pod's
+6. If `top_pods` works (metrics-server installed), include the pod's
    current CPU + memory in the report. If memory ≥ 90 % of the limit,
    flag it.
 
-6. Render the report from `templates/incident_report.md`.
+7. Render the report from `templates/incident_report.md`.
 
 ## Hypothesis ranking
 
