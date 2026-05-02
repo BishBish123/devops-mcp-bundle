@@ -150,3 +150,32 @@ class TestExoticRejected:
         # Literal.String by sqlparse, not Keyword — so the body-scan
         # for INTO must not fire here.
         assert is_read_only_sql("SELECT 'foo into bar'::text")
+
+    def test_select_for_share_rejected(self) -> None:
+        # `FOR SHARE` row-locks the SELECT'd rows. Not a write to user
+        # data, but it acquires locks — incompatible with the bundle's
+        # read-only contract.
+        c = classify_sql("SELECT * FROM t FOR SHARE")
+        assert c.is_read_only is False
+        assert "FOR SHARE" in c.reason
+
+    def test_select_for_update_rejected(self) -> None:
+        c = classify_sql("SELECT * FROM t FOR UPDATE")
+        assert c.is_read_only is False
+        assert "FOR UPDATE" in c.reason
+
+    def test_select_for_no_key_update_rejected(self) -> None:
+        c = classify_sql("SELECT * FROM t FOR NO KEY UPDATE")
+        assert c.is_read_only is False
+        assert "FOR NO KEY UPDATE" in c.reason
+
+    def test_select_for_key_share_rejected(self) -> None:
+        c = classify_sql("SELECT * FROM t FOR KEY SHARE")
+        assert c.is_read_only is False
+        assert "FOR KEY SHARE" in c.reason
+
+    def test_select_with_for_in_string_literal_allowed(self) -> None:
+        # `'for update'` inside a string literal must not trigger the
+        # lock-clause scan — string contents are tagged Literal.String,
+        # not Keyword.
+        assert is_read_only_sql("SELECT 'for update' AS x")

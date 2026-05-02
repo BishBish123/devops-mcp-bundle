@@ -140,9 +140,44 @@ def classify_sql(sql: str) -> Classification:
     if leading not in _READ_ONLY_KEYWORDS:
         return Classification(False, leading, f"unknown leading keyword {leading!r}")
 
+    # SELECT ... FOR {UPDATE|NO KEY UPDATE|SHARE|KEY SHARE} acquires
+    # row-level locks. They don't *write* user data, but they do hold
+    # locks — both layers of "read-only" (parser + DB-side
+    # `default_transaction_read_only`) refuse them, and they have
+    # well-known foot-gun behaviour in production (blocking other
+    # writers until the read transaction commits). Reject explicitly
+    # so the error message names the lock clause.
+    flat = list(stmt.flatten())  # type: ignore[no-untyped-call]
+    for i, token in enumerate(flat):
+        if token.ttype is not Keyword or token.normalized.upper() != "FOR":
+            continue
+        # Look at the next non-whitespace tokens to decide what FOR
+        # clause this is. PG locking suffixes: SHARE, UPDATE, KEY
+        # SHARE, NO KEY UPDATE.
+        suffix: list[str] = []
+        for follow in flat[i + 1 :]:
+            if follow.is_whitespace:
+                continue
+            if follow.ttype not in (Keyword, DML):
+                break
+            suffix.append(follow.normalized.upper())
+            if len(suffix) >= 3:
+                break
+        if not suffix:
+            continue
+        if suffix[0] in ("SHARE", "UPDATE") or (
+            suffix[0] in ("KEY", "NO") and any(w in ("SHARE", "UPDATE") for w in suffix)
+        ):
+            lock = " ".join(suffix[: 3 if suffix[0] == "NO" else 2])
+            return Classification(
+                False,
+                leading,
+                f"SELECT ... FOR {lock} acquires row locks; not allowed in read-only mode",
+            )
+
     # Belt-and-suspenders: scan every flattened token for a mutating
     # keyword inside a CTE / subquery / EXPLAIN body.
-    for token in stmt.flatten():  # type: ignore[no-untyped-call]
+    for token in flat:
         kw = token.normalized.upper()
         if token.ttype in (DML, DDL) and kw in _MUTATING_KEYWORDS:
             return Classification(False, leading, f"{leading} body contains {kw}")
@@ -160,7 +195,7 @@ def classify_sql(sql: str) -> Classification:
     # inside a string literal (`SELECT 'foo into bar'`) it's tagged
     # Literal.String, so this scan is precise.
     if leading in ("SELECT", "WITH"):
-        for token in stmt.flatten():  # type: ignore[no-untyped-call]
+        for token in flat:
             if token.ttype is Keyword and token.normalized.upper() == "INTO":
                 return Classification(
                     False,
