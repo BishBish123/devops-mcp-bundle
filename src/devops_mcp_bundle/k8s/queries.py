@@ -64,7 +64,7 @@ def _ts_iso(value: dt.datetime | None) -> str | None:
 
 
 async def list_namespaces(api: CoreV1Api) -> list[Namespace]:
-    resp = await api.list_namespace()
+    resp = await api.list_namespace(_request_timeout=30)
     return [
         Namespace(
             name=ns.metadata.name,
@@ -76,7 +76,7 @@ async def list_namespaces(api: CoreV1Api) -> list[Namespace]:
 
 
 async def list_pods(api: CoreV1Api, namespace: str, label_selector: str | None = None) -> list[Pod]:
-    resp = await api.list_namespaced_pod(namespace=namespace, label_selector=label_selector or "")
+    resp = await api.list_namespaced_pod(namespace=namespace, label_selector=label_selector or "", _request_timeout=30)
     return [_to_pod(p) for p in resp.items]
 
 
@@ -96,7 +96,7 @@ def _to_pod(p: Any) -> Pod:
 
 
 async def describe_pod(api: CoreV1Api, namespace: str, name: str) -> PodSpec:
-    p = await api.read_namespaced_pod(name=name, namespace=namespace)
+    p = await api.read_namespaced_pod(name=name, namespace=namespace, _request_timeout=30)
     containers: list[dict[str, object]] = [
         {
             "name": c.name,
@@ -177,6 +177,7 @@ async def pod_events(api: CoreV1Api, namespace: str, name: str) -> list[Event]:
     resp = await api.list_namespaced_event(
         namespace=namespace,
         field_selector=f"involvedObject.name={name}",
+        _request_timeout=30,
     )
     return [
         Event(
@@ -206,6 +207,7 @@ async def top_pods(api: CustomObjectsApi, namespace: str) -> list[PodMetric]:
             version="v1beta1",
             namespace=namespace,
             plural="pods",
+            _request_timeout=30,
         )
     except ImportError:
         # The metrics-server custom-object machinery may try to import
@@ -316,7 +318,7 @@ async def list_configmaps(api: CoreV1Api, namespace: str) -> list[ConfigMapInfo]
     reviewer can spot accidental sensitive data without it ever
     crossing the wire to the LLM.
     """
-    resp = await api.list_namespaced_config_map(namespace=namespace)
+    resp = await api.list_namespaced_config_map(namespace=namespace, _request_timeout=30)
     out: list[ConfigMapInfo] = []
     for cm in resp.items:
         keys = list((cm.data or {}).keys()) + list((cm.binary_data or {}).keys())
@@ -338,7 +340,9 @@ async def list_configmaps(api: CoreV1Api, namespace: str) -> list[ConfigMapInfo]
 # `kube-system` can produce tens of thousands of entries during a node
 # rolling-restart. The agent can't usefully consume that, and the
 # in-memory loop below holds every entry before the time-filter runs.
-MAX_EVENTS = 1000
+MAX_K8S_EVENTS = 1000
+# Legacy alias kept for backwards compatibility with existing callers.
+MAX_EVENTS = MAX_K8S_EVENTS
 
 
 async def namespace_events(
@@ -346,7 +350,7 @@ async def namespace_events(
     namespace: str,
     only_warnings: bool = True,
     since_min: int = 60,
-    limit: int = MAX_EVENTS,
+    limit: int = MAX_K8S_EVENTS,
 ) -> list[Event]:
     """Return cluster events in `namespace`, by default Warning-only.
 
@@ -372,15 +376,20 @@ async def namespace_events(
         raise ValueError("since_min must be positive")
     if limit <= 0:
         raise ValueError("limit must be positive")
-    if limit > MAX_EVENTS:
-        raise ValueError(f"limit={limit} exceeds MAX_EVENTS ({MAX_EVENTS})")
+    if limit > MAX_K8S_EVENTS:
+        raise ValueError(f"limit={limit} exceeds MAX_K8S_EVENTS ({MAX_K8S_EVENTS})")
 
     field_selector = "type=Warning" if only_warnings else ""
-    resp = await api.list_namespaced_event(namespace=namespace, field_selector=field_selector)
+    resp = await api.list_namespaced_event(
+        namespace=namespace,
+        field_selector=field_selector,
+        limit=limit,
+        _request_timeout=30,
+    )
     if len(resp.items) > limit:
         raise ValueError(
             f"namespace_events: upstream returned {len(resp.items)} entries, "
-            f"exceeds limit {limit}; shorten since_min or filter by namespace"
+            f"exceeds limit={limit}; shorten since_min or filter by namespace"
         )
     cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=since_min)
     out: list[Event] = []
@@ -406,7 +415,7 @@ async def namespace_events(
 
 async def resource_quotas(api: CoreV1Api, namespace: str) -> list[ResourceQuotaInfo]:
     """List ResourceQuotas in `namespace` with computed per-resource headroom."""
-    resp = await api.list_namespaced_resource_quota(namespace=namespace)
+    resp = await api.list_namespaced_resource_quota(namespace=namespace, _request_timeout=30)
     out: list[ResourceQuotaInfo] = []
     for q in resp.items:
         hard = {k: str(v) for k, v in (q.spec.hard or {}).items()} if q.spec else {}
@@ -548,7 +557,7 @@ async def recent_oomkills(api: CoreV1Api, namespace: str, since_min: int = 60) -
     """Return Warning events whose reason contains 'OOMKill' within `since_min`."""
     if since_min <= 0:
         raise ValueError("since_min must be positive")
-    resp = await api.list_namespaced_event(namespace=namespace, field_selector="type=Warning")
+    resp = await api.list_namespaced_event(namespace=namespace, field_selector="type=Warning", _request_timeout=30)
     cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=since_min)
     out: list[OOMKill] = []
     for e in resp.items:

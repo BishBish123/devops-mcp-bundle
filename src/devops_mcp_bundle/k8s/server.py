@@ -138,7 +138,7 @@ async def namespace_events(
     namespace: str,
     only_warnings: bool = True,
     since_min: int = 60,
-    limit: int = queries.MAX_EVENTS,
+    limit: int = queries.MAX_K8S_EVENTS,
 ) -> list[Event]:
     """Cluster events for `namespace` (Warning-only by default).
 

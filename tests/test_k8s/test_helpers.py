@@ -108,14 +108,22 @@ class TestNamespaceEvents:
         api.list_namespaced_event.return_value = _ns(items=[])
         await queries.namespace_events(api, "prod")
         api.list_namespaced_event.assert_awaited_once_with(
-            namespace="prod", field_selector="type=Warning"
+            namespace="prod",
+            field_selector="type=Warning",
+            limit=queries.MAX_K8S_EVENTS,
+            _request_timeout=30,
         )
 
     async def test_include_normal_events(self) -> None:
         api = AsyncMock()
         api.list_namespaced_event.return_value = _ns(items=[])
         await queries.namespace_events(api, "prod", only_warnings=False)
-        api.list_namespaced_event.assert_awaited_once_with(namespace="prod", field_selector="")
+        api.list_namespaced_event.assert_awaited_once_with(
+            namespace="prod",
+            field_selector="",
+            limit=queries.MAX_K8S_EVENTS,
+            _request_timeout=30,
+        )
 
     async def test_since_filter_drops_old_events(self) -> None:
         api = AsyncMock()
@@ -195,7 +203,7 @@ class TestNamespaceEvents:
                     event_time=None,
                     involved_object=_ns(kind="Pod", name=f"web-{i}"),
                 )
-                for i in range(queries.MAX_EVENTS + 1)
+                for i in range(queries.MAX_K8S_EVENTS + 1)
             ]
         )
         with pytest.raises(ValueError, match="exceeds limit"):
@@ -203,8 +211,8 @@ class TestNamespaceEvents:
 
     async def test_namespace_events_rejects_oversized_limit(self) -> None:
         api = AsyncMock()
-        with pytest.raises(ValueError, match="MAX_EVENTS"):
-            await queries.namespace_events(api, "prod", limit=queries.MAX_EVENTS + 1)
+        with pytest.raises(ValueError, match="MAX_K8S_EVENTS"):
+            await queries.namespace_events(api, "prod", limit=queries.MAX_K8S_EVENTS + 1)
 
 
 # ---------------------------------------------------------------------------

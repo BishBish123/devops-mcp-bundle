@@ -121,7 +121,7 @@ class TestListPods:
         )
         result = await queries.list_pods(api, "default", label_selector="app=web")
         api.list_namespaced_pod.assert_awaited_once_with(
-            namespace="default", label_selector="app=web"
+            namespace="default", label_selector="app=web", _request_timeout=30
         )
         assert [p.name for p in result] == ["web-0", "web-1"]
         assert result[0].restart_count == 2
@@ -132,7 +132,7 @@ class TestListPods:
         api = AsyncMock()
         api.list_namespaced_pod.return_value = _ns(items=[])
         await queries.list_pods(api, "default")
-        api.list_namespaced_pod.assert_awaited_once_with(namespace="default", label_selector="")
+        api.list_namespaced_pod.assert_awaited_once_with(namespace="default", label_selector="", _request_timeout=30)
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ class TestPodEvents:
         )
         out = await queries.pod_events(api, "default", "web-0")
         api.list_namespaced_event.assert_awaited_once_with(
-            namespace="default", field_selector="involvedObject.name=web-0"
+            namespace="default", field_selector="involvedObject.name=web-0", _request_timeout=30
         )
         assert [e.reason for e in out] == ["BackOff", "Scheduled"]
         assert out[0].type == "Warning"
@@ -322,3 +322,54 @@ class TestRecentOomkills:
         api = AsyncMock()
         with pytest.raises(ValueError, match="since_min"):
             await queries.recent_oomkills(api, "default", since_min=0)
+
+
+# ---------------------------------------------------------------------------
+# FIX 4 — namespace_events respects limit + passes it to the API
+# ---------------------------------------------------------------------------
+
+
+class TestNamespaceEventsLimit:
+    def _make_event(self, name: str, secs_ago: int = 30) -> object:
+        return _ns(
+            type="Warning",
+            reason="BackOff",
+            message="container back-off",
+            count=1,
+            last_timestamp=_utc(secs_ago),
+            event_time=None,
+            involved_object=_ns(kind="Pod", name=name),
+        )
+
+    async def test_namespace_events_respects_limit(self) -> None:
+        # 5 events, limit=3 — upstream returns all 5, the post-fetch check
+        # fires because 5 > 3 and the API was asked for at most 3.
+        api = AsyncMock()
+        api.list_namespaced_event.return_value = _ns(
+            items=[self._make_event(f"pod-{i}") for i in range(5)]
+        )
+        with pytest.raises(ValueError, match="exceeds limit"):
+            await queries.namespace_events(api, "default", limit=3)
+
+    async def test_namespace_events_passes_limit_to_api(self) -> None:
+        # The limit kwarg must flow through to list_namespaced_event so
+        # the kube-apiserver can do server-side capping. If it is dropped,
+        # the entire event retention window arrives before the Python-side
+        # check can fire.
+        api = AsyncMock()
+        api.list_namespaced_event.return_value = _ns(items=[])
+        await queries.namespace_events(api, "default", limit=50)
+        call_kwargs = api.list_namespaced_event.call_args.kwargs
+        assert call_kwargs.get("limit") == 50
+
+    async def test_namespace_events_passes_request_timeout(self) -> None:
+        api = AsyncMock()
+        api.list_namespaced_event.return_value = _ns(items=[])
+        await queries.namespace_events(api, "default")
+        call_kwargs = api.list_namespaced_event.call_args.kwargs
+        assert call_kwargs.get("_request_timeout") == 30
+
+    async def test_namespace_events_limit_exceeds_max_rejected(self) -> None:
+        api = AsyncMock()
+        with pytest.raises(ValueError, match="MAX_K8S_EVENTS"):
+            await queries.namespace_events(api, "default", limit=queries.MAX_K8S_EVENTS + 1)
