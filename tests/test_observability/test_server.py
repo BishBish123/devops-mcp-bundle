@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 import pytest
 
-from devops_mcp_bundle.observability import server
+from devops_mcp_bundle.observability import queries, server
 
 
 @asynccontextmanager
@@ -92,3 +92,54 @@ class TestMultiWindowBurnRateTool:
         assert result.ticket is False
         assert result.ticket_long_window is None
         assert result.ticket_short_window is None
+
+
+# ---------------------------------------------------------------------------
+# FIX 7 — render_logql / escape_logql_label MCP tool wrappers
+# ---------------------------------------------------------------------------
+
+
+class TestEscapeLogqlLabelTool:
+    def test_escape_delegates_to_queries_implementation(self) -> None:
+        # The MCP tool is a thin wrapper — verify it returns the same
+        # result as the underlying helper.
+        raw = 'some"value\nwith\ttabs'
+        assert server.escape_logql_label(raw) == queries.escape_logql_label(raw)
+
+    def test_escape_handles_injection_attempt(self) -> None:
+        evil = 'api"} |= "injected'
+        result = server.escape_logql_label(evil)
+        # The injected `"` must be escaped so it can't break the matcher.
+        assert '\\"' in result
+        assert "injected" in result  # content preserved, just escaped
+
+    def test_escape_plain_value_unchanged(self) -> None:
+        assert server.escape_logql_label("simple-value") == "simple-value"
+
+
+class TestRenderLogqlTool:
+    def test_render_substitutes_labels(self) -> None:
+        result = server.render_logql(
+            '{{app="{app}", env="{env}"}}',
+            labels={"app": "api", "env": "prod"},
+        )
+        assert result == '{app="api", env="prod"}'
+
+    def test_render_escapes_values(self) -> None:
+        result = server.render_logql(
+            '{{app="{app}"}} |= "{needle}"',
+            labels={"app": "api", "needle": 'oh "no"'},
+        )
+        # The needle's quote must be escaped.
+        assert '\\"' in result
+        assert "oh" in result
+
+    def test_render_rejects_invalid_key(self) -> None:
+        with pytest.raises(ValueError, match="LogQL label key"):
+            server.render_logql('{{ns="{ns}"}}}', labels={"ns}": "evil"})
+
+    def test_render_empty_labels(self) -> None:
+        # A template with no placeholders: doubled braces are literals,
+        # so no substitution occurs and the result is the single-brace form.
+        tmpl = '{{app="static"}}'
+        assert server.render_logql(tmpl, labels={}) == '{app="static"}'

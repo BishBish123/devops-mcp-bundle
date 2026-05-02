@@ -173,6 +173,52 @@ async def compare_windows(
         return await queries.compare_windows(c, _prom_url(), promql_a, promql_b, label_a, label_b)
 
 
+@mcp.tool
+def escape_logql_label(value: str) -> str:
+    """Escape a string value for safe use inside a LogQL label matcher.
+
+    Replaces ``"``, ``\\``, newlines, carriage returns, and tabs with their
+    backslash-escape equivalents so the result can be embedded inside
+    ``{label="<value>"}`` without breaking out of the matcher. This is the
+    only correct way to put an untrusted dynamic value into a LogQL query.
+
+    Example::
+
+        label = escape_logql_label('my"value')
+        query = f'{{app="{label}"}}'
+        # -> '{app="my\\"value"}'
+    """
+    return queries.escape_logql_label(value)
+
+
+@mcp.tool
+def render_logql(template: str, labels: dict[str, str]) -> str:
+    r"""Render a LogQL template with escaped label values.
+
+    Every value in ``labels`` is run through :func:`escape_logql_label`
+    before substitution, so callers can pass untrusted values without
+    worrying about injection. Template placeholders use Python
+    ``str.format`` syntax: ``{name}`` for each key in ``labels``.
+
+    **Critical**: LogQL uses literal ``{`` and ``}`` for label-matcher
+    blocks. Because `str.format` reserves single braces for placeholders,
+    every literal brace in the template **must be doubled**: ``{{`` for a
+    literal ``{``, ``}}`` for a literal ``}``.
+
+    Example::
+
+        query = render_logql(
+            '{{app="{app}", container="{container}"}} |= "{needle}"',
+            labels={"app": "api", "container": "web", "needle": 'oh "no"'},
+        )
+        # -> '{app="api", container="web"} |= "oh \\"no\\""'
+
+    Raises ``ValueError`` if any key is not a valid LogQL label identifier
+    (``[a-zA-Z_][a-zA-Z0-9_]*``).
+    """
+    return queries.render_logql(template, **labels)
+
+
 _cli = typer.Typer(name="mcp-observability", add_completion=False)
 
 
