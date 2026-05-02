@@ -62,6 +62,40 @@ class TestListConfigmaps:
         assert out[0].keys == []
         assert out[0].redacted_keys == []
 
+    @pytest.mark.parametrize(
+        "key",
+        [
+            # GCP-style service-account variants. People drop these into
+            # ConfigMaps by mistake all the time.
+            "SERVICE_ACCOUNT_JSON",
+            "gcp_service_account",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "firebase_admin_sdk",
+            "sa-key",
+            "sa.json",
+            # AWS variants.
+            "AWS_SESSION_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+            # mTLS material.
+            "CLIENT_CERTIFICATE",
+            "client_private_key",
+        ],
+    )
+    async def test_redacts_compound_cloud_keys(self, key: str) -> None:
+        api = AsyncMock()
+        api.list_namespaced_config_map.return_value = _ns(
+            items=[
+                _ns(
+                    metadata=_ns(namespace="prod", name="cloud-creds"),
+                    data={key: "<value>", "LOG_LEVEL": "debug"},
+                    binary_data=None,
+                ),
+            ]
+        )
+        out = await queries.list_configmaps(api, "prod")
+        assert key in out[0].redacted_keys, f"{key!r} should be flagged as secret-shaped"
+        assert "LOG_LEVEL" not in out[0].redacted_keys
+
 
 # ---------------------------------------------------------------------------
 # namespace_events

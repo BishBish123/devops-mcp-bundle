@@ -284,6 +284,20 @@ _SECRET_KEY_HINTS: tuple[str, ...] = (
     "auth",
     "ssh",
     "cert",
+    # Cloud-provider service-account / signed-key variants. ConfigMaps
+    # holding GCP application-default credentials, AWS session tokens,
+    # or a Firebase admin SDK JSON wouldn't trigger redaction without
+    # these hints — and people put all three in ConfigMaps by mistake.
+    "service_account",
+    "sa_key",
+    "sa.json",
+    "firebase_admin",
+    "google_application_credentials",
+    "gcp",
+    "aws_secret",
+    "aws_session_token",
+    "client_certificate",
+    "client_private_key",
 )
 
 
