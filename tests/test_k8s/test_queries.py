@@ -168,6 +168,24 @@ class TestPodLogs:
         with pytest.raises(ValueError, match="tail"):
             await queries.pod_logs(api, "default", "web-0", tail=0)
 
+    async def test_pod_logs_rejects_oversized_tail(self) -> None:
+        # Hard cap. A caller asking for `tail=1_000_000` would burn
+        # agent context, force a multi-megabyte response shape through
+        # MCP, and hit kube-apiserver rate limits in the middle of an
+        # incident. Reject before the API client is even invoked.
+        api = AsyncMock()
+        with pytest.raises(ValueError, match=str(queries.MAX_POD_LOG_TAIL)):
+            await queries.pod_logs(api, "default", "web-0", tail=queries.MAX_POD_LOG_TAIL + 1)
+        api.read_namespaced_pod_log.assert_not_awaited()
+
+    async def test_pod_logs_at_cap_allowed(self) -> None:
+        # Exactly at the cap is fine — the rejection is strict-greater.
+        api = AsyncMock()
+        api.read_namespaced_pod_log.return_value = ""
+        out = await queries.pod_logs(api, "default", "web-0", tail=queries.MAX_POD_LOG_TAIL)
+        assert out == []
+        api.read_namespaced_pod_log.assert_awaited_once()
+
 
 # ---------------------------------------------------------------------------
 # pod_events

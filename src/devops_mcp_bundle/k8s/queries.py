@@ -126,6 +126,15 @@ async def describe_pod(api: CoreV1Api, namespace: str, name: str) -> PodSpec:
     )
 
 
+#: Hard cap on `pod_logs(tail=...)`. A naive caller asking for
+#: `tail=10_000_000` would burn agent context, force a multi-megabyte
+#: response shape through MCP, and (worst case) hit kube-apiserver
+#: rate limits in the middle of an incident. 10k lines is far above
+#: anything a human reads inline; for deeper history, point the user
+#: at Loki + the observability server.
+MAX_POD_LOG_TAIL = 10_000
+
+
 async def pod_logs(
     api: CoreV1Api,
     namespace: str,
@@ -136,6 +145,8 @@ async def pod_logs(
 ) -> list[LogLine]:
     if tail <= 0:
         raise ValueError("tail must be positive")
+    if tail > MAX_POD_LOG_TAIL:
+        raise ValueError(f"tail must be <= {MAX_POD_LOG_TAIL}")
     # `container` is optional in the API even though the stub types it as
     # `str`; pass `""` to mean "default container".
     text = await api.read_namespaced_pod_log(

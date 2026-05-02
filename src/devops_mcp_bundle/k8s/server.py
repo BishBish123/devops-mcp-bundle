@@ -88,7 +88,19 @@ async def describe_pod(namespace: str, name: str) -> PodSpec:
 async def pod_logs(
     namespace: str, name: str, container: str | None = None, tail: int = 200
 ) -> list[LogLine]:
-    """Tail the last `tail` lines of `container` in pod `namespace/name`."""
+    """Tail the last `tail` lines of `container` in pod `namespace/name`.
+
+    `tail` is capped at :data:`queries.MAX_POD_LOG_TAIL`. For deeper
+    history, route the agent through the observability server (Loki).
+    """
+    # Validate before opening a kube client — saves a TCP roundtrip on
+    # the obvious-mistake path. Mirrors the same check inside
+    # `queries.pod_logs` so the error message is identical no matter
+    # which entry point the caller hits.
+    if tail <= 0:
+        raise ValueError("tail must be positive")
+    if tail > queries.MAX_POD_LOG_TAIL:
+        raise ValueError(f"tail must be <= {queries.MAX_POD_LOG_TAIL}")
     async with _api() as (core, _):
         return await queries.pod_logs(core, namespace, name, container, tail)  # type: ignore[arg-type]
 
