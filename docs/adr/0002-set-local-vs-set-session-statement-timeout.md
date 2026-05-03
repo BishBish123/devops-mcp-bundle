@@ -76,8 +76,20 @@ naive version is invisible.
   connection pool's `default_transaction_read_only = on` flag is the
   right complement: combined with B, the database refuses to
   participate in a write under any circumstances.
-- Tests assert the `SET LOCAL` is honoured by simulating a slow query
-  in `test_queries_integration.py`.
+- Layer 1 (sqlparse classifier) and Layer 2 (`transaction(readonly=True)`
+  + `SET LOCAL statement_timeout`) are tested separately.
+  `tests/test_postgres/test_queries_integration.py` covers:
+    - SELECT round-trip + result shape,
+    - `row_cap` enforcement,
+    - argument validation (`timeout_ms <= 0`, `row_cap <= 0`),
+    - `SET LOCAL statement_timeout` cancellation: `SELECT pg_sleep(2)`
+      with `timeout_ms=100` raises `QueryCanceledError`,
+    - classifier-miss DB rejection: an `INSERT` issued inside a
+      `transaction(readonly=True)` raises
+      `ReadOnlySQLTransactionError` (Postgres SQLSTATE 25006).
+  These run only when `POSTGRES_DSN` points at a live database (CI
+  spins up `pgvector/pgvector:pg17`); they're skipped on developer
+  machines without Docker.
 
 ## Follow-ups
 

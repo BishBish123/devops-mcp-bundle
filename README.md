@@ -127,9 +127,15 @@ Every server is **read-only by construction**:
 
 - The Postgres server has no helper for `INSERT`/`UPDATE`/`DELETE`/`DDL`. The
   one tool that takes user SQL (`run_safe_query`) gates it through a sqlparse
-  classifier (rejects multi-statement, write-via-CTE, EXPLAIN ANALYZE, etc.)
-  *and* sets `default_transaction_read_only=on` on every connection. Two
-  layers, both tested separately.
+  classifier (rejects multi-statement, write-via-CTE, `SELECT ... INTO`,
+  row-locking `FOR UPDATE`/`FOR SHARE`, EXPLAIN ANALYZE, etc.) *and* runs
+  inside a `transaction(readonly=True)` with a `SET LOCAL statement_timeout`.
+  Layer 1 (classifier) is unit-tested; Layer 2 (DB-side `READ ONLY` +
+  `SET LOCAL` enforcement) has integration tests in
+  `tests/test_postgres/test_queries_integration.py` covering round-trip,
+  row caps, slow-query cancellation via `pg_sleep`, and a
+  classifier-miss regression that issues a write inside a read-only
+  transaction and asserts Postgres rejects it.
 - The Kubernetes server has no helper for `delete`, `patch`, `apply`,
   or `exec`. There is no flag to enable them.
 - The observability server is HTTP GET against Prometheus + Loki only.

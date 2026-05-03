@@ -110,6 +110,42 @@ class TestRunSafeQuery:
         with pytest.raises(ValueError, match="row_cap"):
             await queries.run_safe_query(conn, "SELECT 1", row_cap=0)
 
+    async def test_statement_timeout_cancels_slow_query(self, conn: asyncpg.Connection) -> None:
+        # Pin the SET LOCAL statement_timeout contract: a query whose
+        # runtime exceeds `timeout_ms` is canceled by Postgres with the
+        # query-canceled error code (57014). Before this test the README
+        # and ADR-0002 claimed timeout enforcement was tested; in fact
+        # only round-trip + row cap + arg validation were covered, and
+        # the timeout could regress silently.
+        with pytest.raises(asyncpg.exceptions.QueryCanceledError):
+            await queries.run_safe_query(conn, "SELECT pg_sleep(2)", timeout_ms=100)
+
+
+class TestReadOnlyTransaction:
+    """Layer 2: the connection-level `default_transaction_read_only`
+    flag refuses writes even if the parser is somehow fooled.
+
+    The classifier (Layer 1) catches obvious DDL/DML — but the bundle's
+    safety story is "two layers, both load-bearing". This test pins
+    Layer 2 by setting the flag manually and confirming a write inside
+    a `transaction(readonly=True)` block is refused server-side.
+    """
+
+    async def test_classifier_miss_blocked_by_db_readonly(
+        self, conn: asyncpg.Connection, fixture_table: str
+    ) -> None:
+        # `run_safe_query` opens a `transaction(readonly=True)`, which
+        # asyncpg implements by issuing `SET TRANSACTION READ ONLY`.
+        # A write in that transaction is rejected by Postgres with
+        # SQLSTATE 25006 (read_only_sql_transaction). The asyncpg call
+        # we exercise here bypasses the classifier deliberately (we're
+        # testing the database-side gate, not the parser).
+        async with conn.transaction(readonly=True):
+            with pytest.raises(asyncpg.exceptions.ReadOnlySQLTransactionError):
+                await conn.execute(
+                    f'INSERT INTO "{fixture_table}" (label, n) VALUES ($1, $2)', "x", 1
+                )
+
 
 class TestSlowQueries:
     async def test_returns_list(self, conn: asyncpg.Connection) -> None:
