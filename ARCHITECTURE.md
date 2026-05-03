@@ -126,9 +126,12 @@ postgres-slow-query-triage:
 ```
 
 The bundle ships skills that compose tools across servers
-(`deploy-postmortem` reads from observability + k8s; the planned
-`redis-memory-pressure-triage` reads from a Redis MCP server the user
-provides).
+(`deploy-postmortem` reads from observability + k8s).
+`redis-memory-pressure-triage` is a **companion skill**: it ships in
+`skills/` but depends on external tooling (`redis-cli` on PATH, or a
+community-built Redis MCP server the user wires in themselves). Its
+SKILL.md frontmatter declares `requires_external_tooling: redis-cli`
+so a harness can short-circuit if the dependency is missing.
 
 ## What's not in here
 

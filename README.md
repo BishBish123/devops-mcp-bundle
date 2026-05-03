@@ -17,14 +17,21 @@
 | **k8s-inspector** | Pods, logs, events, OOM kills, top metrics — no `delete`/`patch`/`exec` helpers exist | ✅ |
 | **observability** | PromQL (instant + range), LogQL, alerts, SLO burn rate, before/after window compare | ✅ |
 
-Three Claude Code Skills compose them into actual workflows:
+Three Claude Code Skills compose the bundle's own servers into actual
+workflows:
 
 | Skill | Triggers when... |
 | --- | --- |
 | `postgres-slow-query-triage` | "why is the DB slow?", "triage queries on `db_main`" |
 | `k8s-pod-incident-playbook` | "my pod is crash-looping", "investigate `web-0` in `prod`" |
 | `deploy-postmortem` | "did the deploy go badly?", "postmortem for `api` after the rollout" |
-| `redis-memory-pressure-triage` | "Redis is OOM-ing", "what's eating Redis memory on `cache-1`?" |
+
+A fourth, **companion** skill ships in `skills/` but depends on
+external tooling the bundle doesn't provide:
+
+| Skill | Triggers when... | Requires |
+| --- | --- | --- |
+| `redis-memory-pressure-triage` | "Redis is OOM-ing", "what's eating Redis memory on `cache-1`?" | `redis-cli` on the user's PATH, or a community-built Redis MCP server |
 
 Each skill has a companion `EVAL.md` documenting the pass/fail
 conditions and transcript greps you can run to verify the agent did

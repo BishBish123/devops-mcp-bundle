@@ -1,6 +1,7 @@
 ---
 name: redis-memory-pressure-triage
 description: Triage Redis memory pressure — identify big keys, expiring keys, and memory fragmentation using read-only MEMORY commands. Use when a user asks "why is Redis OOM-ing", "what's eating Redis memory", or names a Redis instance that's hot.
+requires_external_tooling: redis-cli
 ---
 
 # Redis memory-pressure triage
