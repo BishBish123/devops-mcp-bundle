@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -222,6 +223,26 @@ def render_logql(template: str, labels: dict[str, str]) -> str:
 _cli = typer.Typer(name="mcp-observability", add_completion=False)
 
 
+def _warn_missing_env() -> None:
+    """Print a stderr warning for any unset Prometheus/Loki URL.
+
+    Non-fatal: the MCP client may still be expected to connect (so the
+    error surfaces through the protocol, not as a process exit). Prints
+    before FastMCP's banner so a user running the server interactively
+    sees the warning even if the banner is delayed by import latency.
+    """
+    missing = [
+        name for name in ("PROMETHEUS_URL", "LOKI_URL") if not os.environ.get(name)
+    ]
+    if missing:
+        print(
+            f"warning: {', '.join(missing)} not set; "
+            "tool calls against the missing backend(s) will fail until configured",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 @_cli.command()
 def run(
     transport: str = typer.Option("stdio", help="MCP transport: stdio | http"),
@@ -229,6 +250,7 @@ def run(
     port: int = typer.Option(8082, help="HTTP bind port."),
 ) -> None:
     """Run the observability MCP server."""
+    _warn_missing_env()
     if transport == "stdio":
         asyncio.run(mcp.run_stdio_async())
     elif transport == "http":

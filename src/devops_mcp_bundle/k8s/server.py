@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -182,6 +183,32 @@ async def resource_quotas(namespace: str) -> list[ResourceQuotaInfo]:
 _cli = typer.Typer(name="mcp-k8s-inspector", add_completion=False)
 
 
+def _warn_missing_env() -> None:
+    """Print a stderr warning if no kube credential source is detected.
+
+    The k8s server loads in-cluster config when ``KUBERNETES_SERVICE_HOST``
+    is set (running as a pod) and otherwise expects a kubeconfig — either
+    at ``$KUBECONFIG`` or the default ``~/.kube/config``. Warn when none
+    of those is reachable so a user running the server interactively
+    sees the cause before tool calls start failing. Non-fatal: the MCP
+    client may still be expected to connect.
+    """
+    if os.environ.get("KUBERNETES_SERVICE_HOST"):
+        return  # In-cluster config will be used.
+    kubeconfig = os.environ.get("KUBECONFIG")
+    if kubeconfig and os.path.isfile(os.path.expanduser(kubeconfig)):
+        return
+    default_kubeconfig = os.path.expanduser("~/.kube/config")
+    if not kubeconfig and os.path.isfile(default_kubeconfig):
+        return
+    print(
+        "warning: no kubeconfig detected (set KUBECONFIG or place one at "
+        "~/.kube/config); tool calls will fail until configured",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 @_cli.command()
 def run(
     transport: str = typer.Option("stdio", help="MCP transport: stdio | http"),
@@ -189,6 +216,7 @@ def run(
     port: int = typer.Option(8081, help="HTTP bind port."),
 ) -> None:
     """Run the Kubernetes Inspector MCP server."""
+    _warn_missing_env()
     if transport == "stdio":
         asyncio.run(mcp.run_stdio_async())
     elif transport == "http":

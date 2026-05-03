@@ -19,11 +19,10 @@ set -euo pipefail
 VENV="${HOME}/.local/share/devops-mcp-bundle"
 # Default to `main` until a release tag is published to the GitHub
 # remote. The `v0.1.0` tag was promoted on the local checkout but the
-# push of that tag to origin is part of the v0.1 release checklist
-# (see CONTRIBUTING.md / release notes); piping this script while the
-# tag is unpublished previously crashed with `pathspec 'v0.1.0' did
-# not match`. Once a tag is pushed, point releases can flip the
-# default by editing this line.
+# push of that tag to origin is part of the v0.1 release checklist;
+# piping this script while the tag is unpublished previously crashed
+# with `pathspec 'v0.1.0' did not match`. Once a tag is pushed, point
+# releases can flip the default by editing this line.
 #
 # Override INSTALL_REF to pin a specific tag, branch, or commit:
 #   INSTALL_REF=main bash install.sh         # explicit (default)

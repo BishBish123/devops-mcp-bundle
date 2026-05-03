@@ -5,7 +5,7 @@
 [![ci](https://github.com/BishBish123/devops-mcp-bundle/actions/workflows/ci.yml/badge.svg)](https://github.com/BishBish123/devops-mcp-bundle/actions/workflows/ci.yml)
 [![python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)](pyproject.toml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![mcp](https://img.shields.io/badge/mcp-spec--conformant-success)]()
+![mcp](https://img.shields.io/badge/mcp-spec--conformant-success)
 
 ---
 
@@ -41,12 +41,12 @@ the right thing — see `skills/<name>/EVAL.md`.
 
 | Tool | Version | Why |
 | --- | --- | --- |
-| **Python** | 3.11 or 3.12 (3.13 not yet supported) | The MCP SDK + asyncpg + kubernetes-asyncio stacks haven't all caught up to 3.13 yet; `requires-python = ">=3.11,<3.13"` enforces this in `pyproject.toml`. |
+| **Python** † | 3.11 or 3.12 (3.13 not yet supported) | The MCP SDK + asyncpg + kubernetes-asyncio stacks haven't all caught up to 3.13 yet; `requires-python = ">=3.11,<3.13"` enforces this in `pyproject.toml`. |
 | **uv** | ≥ 0.4 | Used by `make install`, `uv tool install`, and the CI matrix. Install with `curl -LsSf https://astral.sh/uv/install.sh \| sh`. |
 | **Docker** | any recent | Only required for `make up` (Postgres on `:5433`) and `make test-integration`. The unit suite (`make test`) needs neither Docker nor a DB. |
 
-macOS notes: the system `python3` is 3.9 and Homebrew's current `python3`
-is 3.13 — neither is in the supported range. Run
+† **macOS heads-up**: the system `python3` is 3.9 and Homebrew's current
+`python3` is 3.13 — **neither is in the supported range**. Run
 `uv python install 3.12` (or `brew install python@3.12`) and pass the
 interpreter explicitly: `PYTHON=/opt/homebrew/opt/python@3.12/bin/python3.12 bash install.sh`.
 
@@ -84,15 +84,17 @@ export LOKI_URL=http://localhost:3100
 export KUBECONFIG=~/.kube/config
 
 devops-mcp install \
-    --pgvector-dsn   "$POSTGRES_DSN" \
+    --postgres-dsn   "$POSTGRES_DSN" \
     --prometheus-url "$PROMETHEUS_URL" \
     --loki-url       "$LOKI_URL" \
     --kubeconfig     "$KUBECONFIG"
 ```
 
-Every flag falls back to the matching env var (`POSTGRES_DSN`,
-`PROMETHEUS_URL`, `LOKI_URL`, `KUBECONFIG`), so once you've exported
-them for the stdio smoke test you can re-run with no flags:
+`--postgres-dsn` is the canonical flag; `--pgvector-dsn` is kept as a
+deprecated alias for older scripts. Every flag falls back to the
+matching env var (`POSTGRES_DSN`, `PROMETHEUS_URL`, `LOKI_URL`,
+`KUBECONFIG`), so once you've exported them for the stdio smoke test
+you can re-run with no flags:
 
 ```bash
 devops-mcp install                  # picks up the four env vars
@@ -102,6 +104,94 @@ devops-mcp install --validate       # SELECT 1 + /-/healthy + /ready before writ
 
 `--validate` only probes the backends whose URL/DSN was provided; it's
 safe to run with a partial environment.
+
+### Where the config goes
+
+`devops-mcp install` writes (or merges into) `~/.config/claude/mcp.json`
+by default. Override with `--config /path/to/mcp.json` if your MCP
+client reads from somewhere else.
+
+**Claude Code on macOS**: there is no single canonical `mcp.json`
+location. Two supported workflows:
+
+- **`claude mcp add-json`** (Claude Code's own CLI). Pipe the bundle's
+  dry-run snippet into the `claude` CLI, one server at a time:
+
+  ```bash
+  devops-mcp install --dry-run > /tmp/mcp.json
+  # Then for each server:
+  claude mcp add-json postgres-dba "$(jq '.mcpServers["postgres-dba"]' /tmp/mcp.json)"
+  claude mcp add-json k8s-inspector "$(jq '.mcpServers["k8s-inspector"]' /tmp/mcp.json)"
+  claude mcp add-json observability "$(jq '.mcpServers["observability"]' /tmp/mcp.json)"
+  ```
+
+- **Edit `~/.claude.json` directly**. Claude Code stores its settings
+  there; merge the snippet under a top-level `"mcpServers"` field.
+
+For other MCP clients (Cursor, Continue, the MCP Inspector, etc.),
+point `--config` at the path that client expects. The dry-run snippet
+shown below is portable JSON.
+
+### Example `mcp.json` (output of `devops-mcp install --dry-run`)
+
+```json
+{
+  "mcpServers": {
+    "postgres-dba": {
+      "command": "/Users/you/.local/bin/mcp-postgres-dba",
+      "args": [],
+      "env": {
+        "POSTGRES_DSN": "postgresql://bench:bench@localhost:5433/bench"
+      }
+    },
+    "k8s-inspector": {
+      "command": "/Users/you/.local/bin/mcp-k8s-inspector",
+      "args": [],
+      "env": {
+        "KUBECONFIG": "/Users/you/.kube/config"
+      }
+    },
+    "observability": {
+      "command": "/Users/you/.local/bin/mcp-observability",
+      "args": [],
+      "env": {
+        "PROMETHEUS_URL": "http://localhost:9090",
+        "LOKI_URL": "http://localhost:3100"
+      }
+    }
+  }
+}
+```
+
+Run `devops-mcp install --dry-run` to see the snippet for your machine
+(`command` paths reflect whichever venv `devops-mcp` was launched
+from — `~/.local/bin/...` after `install.sh`, the repo's `.venv` if
+you're running from a clone).
+
+### Skills setup
+
+`devops-mcp install` only writes `mcp.json` — it does **not** install
+the Skills pack. Claude Code reads skills from `~/.claude/skills/`, so
+copy each `SKILL.md` file into its own directory there:
+
+```bash
+# from a checkout of this repo:
+for s in postgres-slow-query-triage k8s-pod-incident-playbook deploy-postmortem; do
+    mkdir -p ~/.claude/skills/$s
+    cp skills/$s/SKILL.md ~/.claude/skills/$s/
+done
+
+# Companion skill — only useful if you have redis-cli on PATH:
+mkdir -p ~/.claude/skills/redis-memory-pressure-triage
+cp skills/redis-memory-pressure-triage/SKILL.md ~/.claude/skills/redis-memory-pressure-triage/
+```
+
+After copying, restart Claude Code. The skills' `description:`
+frontmatter is what the agent matches against — say "why is the DB
+slow on db_main" and `postgres-slow-query-triage` should activate.
+Run `devops-mcp list-skills` to see the trigger phrases. (TODO:
+`devops-mcp install --install-skills` could automate this — open to
+PRs.)
 
 ## Run a server standalone (stdio)
 
@@ -155,7 +245,7 @@ suspect drift.
 - `namespace_events(...)` — recent events scoped to a namespace
 - `resource_quotas(namespace)` — used vs. hard limits per quota object
 
-### observability (8 tools)
+### observability (10 tools)
 
 - `prom_query(promql)` — instant PromQL
 - `prom_range(promql, start, end, step)` — range PromQL; window capped at 1 week, samples capped at 10k
@@ -165,11 +255,28 @@ suspect drift.
 - `slo_status(service, objective, success_query, total_query, window)` — actual + burn-rate from caller-supplied PromQL
 - `multi_window_burn_rate(objective, long_burn_query, short_burn_query, …)` — Google SRE-workbook two-window page + ticket
 - `compare_windows(promql_a, promql_b)` — delta + percent change between two PromQL expressions
+- `escape_logql_label(value)` — escape one untrusted value for use inside a `{label="<value>"}` matcher
+- `render_logql(template, labels)` — render a LogQL template with auto-escaped label values
 
-The `escape_logql_label(value)` and `render_logql(template, **labels)`
-helpers in `observability.queries` are the supported way to compose
-LogQL with untrusted label values — they prevent matcher break-out
+`escape_logql_label` and `render_logql` are also exported as a Python
+import (`from devops_mcp_bundle.observability.queries import …`) for
+in-process callers — that's the surface used by tests and the helper
+scripts in `skills/`. Both forms are the supported way to compose
+LogQL with untrusted label values; they prevent matcher break-out
 attacks the same way `is_read_only_sql` prevents SQL injection.
+
+**API note** — the two forms have slightly different signatures:
+
+| Surface | Signature |
+| --- | --- |
+| MCP tool (agent-facing) | `render_logql(template: str, labels: dict[str, str])` |
+| Python import (in-process) | `render_logql(template: str, **labels: str)` |
+
+The Python import accepts label values as keyword arguments
+(`render_logql(tpl, app="api", container="web")`); the MCP tool wraps
+that and takes a `labels` dict (`{"labels": {"app": "api",
+"container": "web"}}`). Use whichever fits your call site — the
+escaping behaviour is identical.
 
 `render_logql` uses Python `str.format` syntax under the hood, which
 means **every literal LogQL brace has to be doubled**: `{{` for a
@@ -194,6 +301,18 @@ render_logql(
 # nested placeholder name and str.format raises
 # `ValueError: unexpected '{' in field name`.
 render_logql('{app="{app}"}', app="api")
+```
+
+The same call as an MCP tool invocation (an agent's tool call):
+
+```json
+{
+  "name": "render_logql",
+  "arguments": {
+    "template": "{{app=\"{app}\", container=\"{container}\"}} |= \"{needle}\"",
+    "labels": {"app": "api", "container": "web", "needle": "oh \"no\""}
+  }
+}
 ```
 
 The double-quote breakout in `needle` is escaped automatically; you

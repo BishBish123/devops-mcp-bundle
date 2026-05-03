@@ -105,6 +105,7 @@ def list_skills() -> None:
     table = Table(title="Skills")
     table.add_column("Name", style="bold")
     table.add_column("Description")
+    table.add_column("Requires")
     for skill_dir in sorted(skills_root.iterdir()):
         skill_md = skill_dir / "SKILL.md"
         if not skill_md.is_file():
@@ -112,13 +113,15 @@ def list_skills() -> None:
         text = skill_md.read_text(encoding="utf-8")
         # Cheap frontmatter parse — all our skills use the same shape.
         desc = ""
+        requires = ""
         if text.startswith("---"):
             front = text.split("---", 2)[1]
             for line in front.splitlines():
                 if line.startswith("description:"):
                     desc = line.partition(":")[2].strip()
-                    break
-        table.add_row(skill_dir.name, desc)
+                elif line.startswith("requires_external_tooling:"):
+                    requires = line.partition(":")[2].strip()
+        table.add_row(skill_dir.name, desc, requires)
     console.print(table)
 
 
@@ -157,11 +160,15 @@ def install(
         Path.home() / ".config/claude/mcp.json",
         help="Path to the Claude Code MCP config file (will be created if missing).",
     ),
-    pgvector_dsn: str | None = typer.Option(
+    postgres_dsn: str | None = typer.Option(
         None,
+        "--postgres-dsn",
+        "--pgvector-dsn",
         help=(
             "POSTGRES_DSN to bake into the postgres-dba server entry. "
-            "Defaults to $POSTGRES_DSN if set."
+            "Defaults to $POSTGRES_DSN if set. (`--pgvector-dsn` is the "
+            "deprecated alias kept for backwards compatibility — the "
+            "server is generic Postgres DBA, not pgvector-specific.)"
         ),
     ),
     prometheus_url: str | None = typer.Option(
@@ -221,15 +228,15 @@ def install(
     # running the stdio smoke test. The previous behaviour wrote `env: {}`
     # for every server when called with no flags, leaving the user to
     # hand-edit mcp.json. The flag still wins when both are present.
-    pgvector_dsn = pgvector_dsn or os.environ.get("POSTGRES_DSN") or None
+    postgres_dsn = postgres_dsn or os.environ.get("POSTGRES_DSN") or None
     prometheus_url = prometheus_url or os.environ.get("PROMETHEUS_URL") or None
     loki_url = loki_url or os.environ.get("LOKI_URL") or None
     if kubeconfig is None and os.environ.get("KUBECONFIG"):
         kubeconfig = Path(os.environ["KUBECONFIG"])
 
     common_env: dict[str, str] = {}
-    if pgvector_dsn:
-        common_env["POSTGRES_DSN"] = pgvector_dsn
+    if postgres_dsn:
+        common_env["POSTGRES_DSN"] = postgres_dsn
     if prometheus_url:
         common_env["PROMETHEUS_URL"] = prometheus_url
     if loki_url:
@@ -240,7 +247,7 @@ def install(
     validation_results: list[tuple[str, str, bool, str | None]] = []
     if validate:
         validation_results = _validate_backends(
-            pgvector_dsn=pgvector_dsn,
+            postgres_dsn=postgres_dsn,
             prometheus_url=prometheus_url,
             loki_url=loki_url,
         )
@@ -265,6 +272,19 @@ def install(
     console.print(
         f"[green]wrote[/] {len(_SERVERS)} server entries to {config} (backup at {backup.name})"
     )
+    # Claude Code on macOS does NOT read this path — it stores MCP servers
+    # in ~/.claude.json under the `mcpServers` field, managed via the
+    # `claude mcp` CLI. This file is the portable / non-Claude-Code layout
+    # (works for any client that reads ~/.config/claude/mcp.json). Surface
+    # the canonical Claude Code workflow on stderr so users on macOS know
+    # they probably want `claude mcp add-json` instead.
+    console.print(
+        "[yellow]hint:[/] for Claude Code, prefer "
+        "[cyan]claude mcp add-json[/] (per-server) or merge this file into "
+        "[cyan]~/.claude.json[/] under the [cyan]mcpServers[/] field — "
+        "Claude Code does not read this path directly.",
+        style="dim",
+    )
 
     if validate and validation_results:
         _print_validation_summary(validation_results)
@@ -275,7 +295,7 @@ def install(
 
 def _validate_backends(
     *,
-    pgvector_dsn: str | None,
+    postgres_dsn: str | None,
     prometheus_url: str | None,
     loki_url: str | None,
 ) -> list[tuple[str, str, bool, str | None]]:
@@ -291,16 +311,16 @@ def _validate_backends(
     so we exercise the same driver the postgres-dba server uses.
     """
     results: list[tuple[str, str, bool, str | None]] = []
-    if pgvector_dsn:
+    if postgres_dsn:
 
         async def _probe_pg() -> None:
-            conn = await asyncpg.connect(pgvector_dsn, timeout=5)
+            conn = await asyncpg.connect(postgres_dsn, timeout=5)
             try:
                 await conn.fetchval("SELECT 1")
             finally:
                 await conn.close()
 
-        safe_dsn = _redact_dsn(pgvector_dsn)
+        safe_dsn = _redact_dsn(postgres_dsn)
         try:
             anyio.run(_probe_pg)
             results.append(("postgres", safe_dsn, True, None))

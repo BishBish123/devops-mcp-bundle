@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -166,6 +167,22 @@ async def run_safe_query(sql: str, timeout_ms: int = 5000, row_cap: int = 1000) 
 _cli = typer.Typer(name="mcp-postgres-dba", add_completion=False)
 
 
+def _warn_missing_env() -> None:
+    """Print a stderr warning if POSTGRES_DSN is unset.
+
+    Non-fatal: the MCP client may still be expected to connect (so the
+    error surfaces through the protocol, not as a process exit). Prints
+    before FastMCP's banner so a user running the server interactively
+    sees the warning even if the banner is delayed by import latency.
+    """
+    if not os.environ.get("POSTGRES_DSN"):
+        print(
+            "warning: POSTGRES_DSN not set; tool calls will fail until configured",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 @_cli.command()
 def run(
     transport: str = typer.Option("stdio", help="MCP transport: stdio | http"),
@@ -173,6 +190,7 @@ def run(
     port: int = typer.Option(8080, help="HTTP bind port."),
 ) -> None:
     """Run the Postgres DBA MCP server."""
+    _warn_missing_env()
     if transport == "stdio":
         asyncio.run(mcp.run_stdio_async())
     elif transport == "http":
