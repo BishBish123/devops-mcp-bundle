@@ -37,26 +37,55 @@ If the user gives none of these, ask for the deploy time first.
 ## Playbook
 
 1. **Establish the deploy window.** Set `deploy_at` from the user input.
-   Pick `before = deploy_at - 1h`, `after = now`. Mention both windows
+   The "before" window is the 1h ending at `deploy_at`; the "after"
+   window is the 1h starting at `deploy_at`. Mention both windows
    explicitly in the report so the reader knows what you compared.
 
-2. **Compare the four golden signals** with `compare_windows`:
-   - Latency: `histogram_quantile(0.95, sum(rate(...)))` for the service
-   - Errors: `sum(rate(http_requests_total{job=...,code=~"5.."}[5m]))`
+2. **Compare the four golden signals** with `compare_windows(promql_a,
+   promql_b, label_a, label_b)`. The tool runs both PromQL expressions
+   instantly and returns the delta + percent change — there's no
+   separate `before` / `after` time argument, so the *time window*
+   has to live inside each PromQL string via `[5m]` rate windows and
+   an explicit `offset 1h` on the "before" side.
+
+   For each signal, build two PromQLs of the same shape, one with
+   `offset 1h` and one without. Example for error rate on
+   `job="api"`:
+
+   ```
+   promql_a = 'sum(rate(http_requests_total{job="api",code=~"5.."}[5m]))'
+   promql_b = 'sum(rate(http_requests_total{job="api",code=~"5.."}[5m] offset 1h))'
+   compare_windows(promql_a, promql_b, label_a="after", label_b="before")
+   ```
+
+   Repeat for the three remaining signals (use the same `[5m]` rate
+   window and `offset 1h` so the comparison is apples-to-apples):
+
+   - Latency: `histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job=...}[5m])))`
    - Traffic: `sum(rate(http_requests_total{job=...}[5m]))`
-   - Saturation: `max(node_memory_used / node_memory_total)` or similar
-   For each, run `compare_windows` between `now` and `(deploy_at - 5m)`.
+   - Saturation: `max(node_memory_MemUsed_bytes / node_memory_MemTotal_bytes)`
 
 3. **Check active alerts** with `prom_alerts`. Filter to those whose
    `severity` is `page` and whose `started_at` is within the deploy
    window.
 
-4. **Pull error logs** with `loki_query` using a query that matches the
-   service: `{job="<service>"} |= "ERROR"` for `since=<window length>`.
-   Cap at 50 entries.
+4. **Pull error logs** with `loki_query`. Build the LogQL with
+   `render_logql` so the service name is escaped:
+
+   ```python
+   from devops_mcp_bundle.observability.queries import render_logql
+   logql = render_logql('{{job="{job}"}} |= "ERROR"', job=service)
+   loki_query(logql, since="1h", limit=50)
+   ```
+
+   Never interpolate `service` into a raw f-string — `escape_logql_label`
+   exists to prevent matcher break-out. (If you have a fixed
+   service name you've already validated, raw is fine; for any value
+   that came from the user, route it through `render_logql`.)
 
 5. **If a namespace was given**, `recent_oomkills(namespace, since_min)`
-   to see if anything got killed by the rollout.
+   to see if anything got killed by the rollout. Pick `since_min` to
+   cover the "after" window (60 if the window is 1h).
 
 6. **Render the report** from `templates/postmortem.md`. Lead with the
    timeline, then the golden-signals comparison table, then the

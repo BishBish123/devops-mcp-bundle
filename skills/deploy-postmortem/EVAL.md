@@ -7,14 +7,21 @@ How to verify the skill is doing the right thing.
 After the agent runs the skill, the postmortem **must**:
 
 1. Bound the time window. The user typically gives a deploy timestamp
-   (or a commit SHA the skill resolves to one); the report uses
-   `compare_windows` with the deploy time as the boundary.
+   (or a commit SHA the skill resolves to one); the report compares
+   the hour ending at `deploy_at` to the hour starting at `deploy_at`.
+   `compare_windows` takes two PromQL expressions (no time argument);
+   the "before" side has to use `offset 1h` to look back across the
+   deploy boundary.
 2. Show the before/after delta for at least 3 metrics: error rate,
    latency p99, request rate. Everything else is optional but should
-   reuse the same window.
+   reuse the same window — same `[5m]` rate range, same `offset` on
+   the before side.
 3. Cross-reference Loki logs from the post-deploy window for the same
-   service. If `loki_query` returns more error-level entries after the
-   deploy than before by `> 2x`, flag the deploy as "regressed".
+   service. The LogQL must come from `render_logql` (or hand-built with
+   `escape_logql_label` for the service value); raw f-string
+   interpolation of the service name is a fail. If `loki_query`
+   returns more error-level entries after the deploy than before by
+   `> 2x`, flag the deploy as "regressed".
 4. End with a "what to do next" section, with one option per row:
    investigate further / roll back / accept regression with caveat.
 
