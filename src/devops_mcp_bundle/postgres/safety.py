@@ -19,7 +19,7 @@ the server-side flag catches everything the parser misses.
 from __future__ import annotations
 
 import sqlparse
-from sqlparse.tokens import DDL, DML, Keyword
+from sqlparse.tokens import DDL, DML, Keyword, Name, Punctuation
 
 # Statement-leading tokens we consider read-only. SELECT and friends.
 # `ANALYZE` is *not* in this set even though it returns no rows — it
@@ -60,6 +60,71 @@ _MUTATING_KEYWORDS: frozenset[str] = frozenset(
         "LISTEN",
         "NOTIFY",
         "UNLISTEN",
+    }
+)
+
+# Pg-builtin / contrib functions that mutate state or have side effects even
+# when called from inside a SELECT. The classifier's leading-keyword check
+# waves SELECT through, so without this denylist a caller could smuggle
+# `SELECT pg_terminate_backend(123)` through the parser. The DB-side
+# `default_transaction_read_only` flag catches *most* of these — but not all
+# (advisory locks don't count as writes; `dblink_exec` writes on a remote
+# host the local read-only flag doesn't govern), and even when it does,
+# rejecting at the parser yields a clearer error message that names the
+# offending function.
+#
+# All entries are lowercase; the matcher compares case-insensitively.
+_SIDE_EFFECTING_FUNCTIONS: frozenset[str] = frozenset(
+    {
+        # Backend / cluster control
+        "pg_terminate_backend",
+        "pg_cancel_backend",
+        "pg_reload_conf",
+        "pg_rotate_logfile",
+        "pg_promote",
+        # Advisory locks (don't write user data, but acquire locks that
+        # block other sessions — incompatible with the read-only contract)
+        "pg_advisory_lock",
+        "pg_advisory_lock_shared",
+        "pg_advisory_xact_lock",
+        "pg_advisory_xact_lock_shared",
+        "pg_try_advisory_lock",
+        "pg_try_advisory_lock_shared",
+        "pg_try_advisory_xact_lock",
+        "pg_try_advisory_xact_lock_shared",
+        "pg_advisory_unlock",
+        "pg_advisory_unlock_all",
+        "pg_advisory_unlock_shared",
+        # Session/local config mutation
+        "set_config",
+        # Replication-slot management
+        "pg_create_logical_replication_slot",
+        "pg_drop_replication_slot",
+        "pg_replication_slot_advance",
+        "pg_create_physical_replication_slot",
+        # Snapshot import/export (visible side effects across sessions)
+        "pg_export_snapshot",
+        "pg_import_snapshot",
+        # Logical-decoding message emitter
+        "pg_logical_emit_message",
+        # WAL / backup control
+        "pg_switch_wal",
+        "pg_walfile_name",
+        "pg_start_backup",
+        "pg_stop_backup",
+        "pg_backup_start",
+        "pg_backup_stop",
+        # dblink can mutate a remote DB the local read-only flag can't see
+        "dblink_exec",
+        "dblink",
+        # Large object mutators
+        "lo_create",
+        "lo_unlink",
+        "lo_import",
+        "lo_export",
+        # Sequence mutators
+        "nextval",
+        "setval",
     }
 )
 
@@ -203,4 +268,51 @@ def classify_sql(sql: str) -> Classification:
                     "SELECT ... INTO creates a new table; not allowed in read-only mode",
                 )
 
+    # Scan for calls to side-effecting builtins (pg_terminate_backend,
+    # pg_advisory_lock, set_config, dblink, nextval, …). The leading-
+    # keyword check accepts SELECT and WITH; a caller could otherwise
+    # smuggle a mutating function through the parser as
+    # `SELECT pg_terminate_backend(123)`. We look for an IDENTIFIER token
+    # in the denylist immediately followed by `(` (skipping whitespace),
+    # which is the only shape a function call takes in flattened SQL.
+    bad_fn = _find_side_effecting_call(flat)
+    if bad_fn is not None:
+        return Classification(
+            False,
+            leading,
+            f"call to side-effecting function {bad_fn}() is not allowed in read-only mode",
+        )
+
     return Classification(True, leading, f"{leading} is read-only")
+
+
+def _find_side_effecting_call(flat: list[sqlparse.sql.Token]) -> str | None:
+    """Return the name of the first denylisted function called in `flat`.
+
+    `flat` is the output of `Statement.flatten()` — a flat sequence of
+    leaf tokens. A function call lexes as `Name "fn"` then optional
+    whitespace then `Punctuation "("`. We walk pairwise; matching is
+    case-insensitive (sqlparse leaves identifiers in their original
+    casing).
+    """
+    for i, token in enumerate(flat):
+        # Identifiers are tagged Token.Name; quoted identifiers come
+        # through too but we want raw bareword function names — quoted
+        # identifiers (`"pg_terminate_backend"`) bypass our matcher,
+        # which is acceptable because Postgres treats them as
+        # case-sensitive and operators rarely use them for builtin calls.
+        if token.ttype is not Name:
+            continue
+        name: str = str(token.value).lower()
+        if name not in _SIDE_EFFECTING_FUNCTIONS:
+            continue
+        # Look ahead for `(`, skipping whitespace. If the next non-space
+        # token isn't `(`, this is a column / alias reference, not a
+        # call — wave it through.
+        for follow in flat[i + 1 :]:
+            if follow.is_whitespace:
+                continue
+            if follow.ttype is Punctuation and follow.value == "(":
+                return name
+            break
+    return None

@@ -179,3 +179,53 @@ class TestExoticRejected:
         # lock-clause scan — string contents are tagged Literal.String,
         # not Keyword.
         assert is_read_only_sql("SELECT 'for update' AS x")
+
+
+class TestSideEffectingFunctionDenylist:
+    """The classifier must refuse SELECTs that smuggle side-effecting
+    function calls past the leading-keyword check.
+
+    `default_transaction_read_only` catches most of these at the DB
+    layer, but not advisory locks, not `dblink_exec` (writes happen on
+    a remote host the local read-only flag can't govern), and the error
+    message Postgres returns is generic. Layer 1 names the offending
+    function up-front."""
+
+    def test_classifier_rejects_pg_terminate_backend(self) -> None:
+        c = classify_sql("SELECT pg_terminate_backend(123)")
+        assert c.is_read_only is False
+        assert "pg_terminate_backend" in c.reason
+
+    def test_classifier_rejects_pg_advisory_lock(self) -> None:
+        c = classify_sql("SELECT pg_advisory_lock(1)")
+        assert c.is_read_only is False
+        assert "pg_advisory_lock" in c.reason
+
+    def test_classifier_rejects_set_config_mutating_call(self) -> None:
+        c = classify_sql("SELECT set_config('work_mem', '64MB', false)")
+        assert c.is_read_only is False
+        assert "set_config" in c.reason
+
+    def test_classifier_rejects_dblink_exec(self) -> None:
+        c = classify_sql("SELECT dblink_exec('host=remote', 'INSERT INTO t VALUES (1)')")
+        assert c.is_read_only is False
+        assert "dblink_exec" in c.reason
+
+    def test_classifier_rejects_nextval(self) -> None:
+        c = classify_sql("SELECT nextval('my_seq')")
+        assert c.is_read_only is False
+        assert "nextval" in c.reason
+
+    def test_classifier_allows_pg_stat_activity(self) -> None:
+        # `pg_stat_activity` is a read-only system view, not a function;
+        # the denylist matcher must not be triggered by table
+        # references that happen to share a `pg_` prefix.
+        assert is_read_only_sql("SELECT pid FROM pg_stat_activity")
+
+    def test_classifier_rejects_function_inside_cte(self) -> None:
+        # The CTE body parses with the same flat token stream; the
+        # denylist scan walks the entire flattened statement so it
+        # catches the call regardless of nesting.
+        c = classify_sql("WITH x AS (SELECT pg_terminate_backend(123)) SELECT * FROM x")
+        assert c.is_read_only is False
+        assert "pg_terminate_backend" in c.reason
