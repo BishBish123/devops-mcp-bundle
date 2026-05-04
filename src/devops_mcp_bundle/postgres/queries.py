@@ -359,10 +359,17 @@ async def run_safe_query(
       an explicit transaction. asyncpg autocommits each `execute()` if no
       transaction is open, which would discard `SET LOCAL` immediately
       and leave the caller's timeout silently ignored.
-    - `row_cap` is enforced by truncating the result set in Python rather
-      than rewriting the SQL. The naive `f"{sql} LIMIT N"` pattern breaks
-      `SHOW`, breaks user-supplied `LIMIT`/`FETCH`, and is bypassed by a
-      trailing `--` comment.
+    - `row_cap` is enforced by a server-side cursor: we ask the database
+      for at most ``row_cap + 1`` rows and never materialise the rest.
+      The earlier `await conn.fetch(sql)` pulled the whole result set
+      into agent memory before truncating Python-side, so a
+      ``SELECT * FROM big_table`` could OOM the agent before the cap
+      ever fired. The extra +1 lets us flag truncation accurately
+      without a second round-trip.
+    - The cursor is opened inside the same `transaction(readonly=True)`
+      as `SET LOCAL statement_timeout`, so the timeout still bounds the
+      *entire* query — including the time spent pulling rows over the
+      wire — exactly as the previous fetch-all path did.
     """
     if timeout_ms <= 0:
         raise ValueError("timeout_ms must be positive")
@@ -372,11 +379,16 @@ async def run_safe_query(
     start = time.perf_counter()
     async with conn.transaction(readonly=True):
         await conn.execute(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
-        rows = await conn.fetch(sql)
+        cur = await conn.cursor(sql)
+        # Fetch one more than the cap so we can distinguish "exactly
+        # row_cap rows" from "more than row_cap rows" without issuing
+        # a second query.
+        rows = await cur.fetch(row_cap + 1)
     elapsed = (time.perf_counter() - start) * 1000.0
 
+    truncated = len(rows) > row_cap
     if not rows:
-        return QueryResult(columns=[], rows=[], row_count=0, elapsed_ms=elapsed)
+        return QueryResult(columns=[], rows=[], row_count=0, elapsed_ms=elapsed, truncated=False)
     capped = rows[:row_cap]
     columns = list(capped[0].keys())
     return QueryResult(
@@ -384,4 +396,5 @@ async def run_safe_query(
         rows=[[r[c] for c in columns] for r in capped],
         row_count=len(capped),
         elapsed_ms=elapsed,
+        truncated=truncated,
     )

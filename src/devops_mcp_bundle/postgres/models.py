@@ -79,6 +79,13 @@ class QueryResult(BaseModel):
     rows: list[list[object]]
     row_count: int
     elapsed_ms: float
+    truncated: bool = Field(
+        default=False,
+        description=(
+            "True iff the query returned more rows than `row_cap`; the response holds the "
+            "first `row_cap` rows and the rest were never pulled from the server."
+        ),
+    )
 
 
 class ActivitySnapshot(BaseModel):
