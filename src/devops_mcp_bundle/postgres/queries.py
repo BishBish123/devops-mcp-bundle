@@ -343,6 +343,18 @@ def kill_query(pid: int) -> str:
     )
 
 
+#: Hard ceilings on ``run_safe_query`` knobs. Lower-bound validation
+#: alone (``timeout_ms > 0``, ``row_cap > 0``) lets a caller pass values
+#: like ``timeout_ms=3_600_000`` (a one-hour ``SET LOCAL statement_timeout``
+#: on a read-only pool) or ``row_cap=5_000_000`` (which the server-side
+#: cursor honours by materialising 5M+1 asyncpg ``Record`` objects in
+#: agent memory before the row-cap truncation fires). Both ceilings
+#: protect the agent process; the database has its own protections via
+#: ``default_transaction_read_only`` and connection-level limits.
+MAX_QUERY_TIMEOUT_MS = 30_000
+MAX_QUERY_ROW_CAP = 10_000
+
+
 async def run_safe_query(
     conn: asyncpg.Connection, sql: str, timeout_ms: int = 5000, row_cap: int = 1000
 ) -> QueryResult:
@@ -373,8 +385,18 @@ async def run_safe_query(
     """
     if timeout_ms <= 0:
         raise ValueError("timeout_ms must be positive")
+    if timeout_ms > MAX_QUERY_TIMEOUT_MS:
+        raise ValueError(
+            f"timeout_ms={timeout_ms} exceeds MAX_QUERY_TIMEOUT_MS={MAX_QUERY_TIMEOUT_MS}; "
+            "long-running analysis belongs in a notebook, not the MCP path"
+        )
     if row_cap <= 0:
         raise ValueError("row_cap must be positive")
+    if row_cap > MAX_QUERY_ROW_CAP:
+        raise ValueError(
+            f"row_cap={row_cap} exceeds MAX_QUERY_ROW_CAP={MAX_QUERY_ROW_CAP}; "
+            "agent context cannot usefully consume more rows than this"
+        )
 
     start = time.perf_counter()
     async with conn.transaction(readonly=True):

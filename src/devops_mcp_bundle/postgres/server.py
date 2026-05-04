@@ -151,6 +151,21 @@ async def run_safe_query(sql: str, timeout_ms: int = 5000, row_cap: int = 1000) 
     Refuses anything that is not a single SELECT/EXPLAIN/SHOW/WITH/VALUES
     statement before contacting the database. Server-side enforces
     `default_transaction_read_only` as a second layer.
+
+    Bounds enforced before the connection is acquired:
+      * ``timeout_ms`` must be in ``(0, MAX_QUERY_TIMEOUT_MS]`` — currently
+        ``30_000`` (30 s). Long-running analysis belongs in a notebook,
+        not the MCP path.
+      * ``row_cap`` must be in ``(0, MAX_QUERY_ROW_CAP]`` — currently
+        ``10_000``. Above this the agent context cannot usefully consume
+        the result anyway, and the server-side cursor would still pull
+        ``row_cap+1`` Records into memory before truncating.
+
+    A request outside those bounds raises ``ValueError`` with the
+    rejected value; agents that need more should split the query or
+    move to an out-of-band tool. The caps are deliberate refusals, not
+    silent clamps — silent clamping would hide partial results from
+    callers reasoning about completeness.
     """
     classification = classify_sql(sql)
     if not classification.is_read_only:

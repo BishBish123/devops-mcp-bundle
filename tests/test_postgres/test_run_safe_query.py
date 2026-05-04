@@ -133,3 +133,50 @@ class TestRunSafeQueryUsesCursor:
         conn = _FakeConn(total_rows=0, columns=["id"])
         with pytest.raises(ValueError, match="row_cap"):
             await queries.run_safe_query(conn, "SELECT 1", row_cap=bad)  # type: ignore[arg-type]
+
+
+class TestRunSafeQueryUpperBounds:
+    """Hard ceilings on ``timeout_ms`` and ``row_cap``.
+
+    The lower bound (``> 0``) was already enforced; without an upper
+    bound a caller could pass ``timeout_ms=3_600_000`` (a one-hour
+    ``SET LOCAL statement_timeout``) or ``row_cap=5_000_000`` (which
+    the server-side cursor honours by materialising 5M+1 asyncpg
+    Records in agent memory before truncation). Both protect the agent
+    process from misuse — the database has its own protections.
+    """
+
+    async def test_timeout_above_max_rejected(self) -> None:
+        conn = _FakeConn(total_rows=0, columns=["id"])
+        with pytest.raises(ValueError, match="MAX_QUERY_TIMEOUT_MS"):
+            await queries.run_safe_query(
+                conn,  # type: ignore[arg-type]
+                "SELECT 1",
+                timeout_ms=queries.MAX_QUERY_TIMEOUT_MS + 1,
+            )
+
+    async def test_row_cap_above_max_rejected(self) -> None:
+        conn = _FakeConn(total_rows=0, columns=["id"])
+        with pytest.raises(ValueError, match="MAX_QUERY_ROW_CAP"):
+            await queries.run_safe_query(
+                conn,  # type: ignore[arg-type]
+                "SELECT 1",
+                row_cap=queries.MAX_QUERY_ROW_CAP + 1,
+            )
+
+    async def test_timeout_at_max_accepted(self) -> None:
+        # Boundary: exactly MAX is fine.
+        conn = _FakeConn(total_rows=1, columns=["id"])
+        await queries.run_safe_query(
+            conn,  # type: ignore[arg-type]
+            "SELECT 1",
+            timeout_ms=queries.MAX_QUERY_TIMEOUT_MS,
+        )
+
+    async def test_row_cap_at_max_accepted(self) -> None:
+        conn = _FakeConn(total_rows=1, columns=["id"])
+        await queries.run_safe_query(
+            conn,  # type: ignore[arg-type]
+            "SELECT 1",
+            row_cap=queries.MAX_QUERY_ROW_CAP,
+        )
