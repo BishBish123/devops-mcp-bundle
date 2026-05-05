@@ -73,13 +73,70 @@ class TestPromQuery:
             ],
         )
         async with _client_with(lambda req: httpx.Response(200, json=body)) as c:
-            series = await queries.prom_range(c, PROM, "up", "now-1h", "now")
+            # Use a real RFC3339 window — "now-1h" is not a valid
+            # /api/v1/query_range arg, so the bounds-check rejects it.
+            series = await queries.prom_range(
+                c, PROM, "up", "2026-04-29T02:00:00Z", "2026-04-29T03:00:00Z"
+            )
         assert len(series[0].samples) == 2
 
     async def test_blank_query_rejected(self) -> None:
         async with _client_with(lambda req: httpx.Response(200)) as c:
             with pytest.raises(ValueError, match="promql"):
                 await queries.prom_query(c, PROM, "  ")
+
+
+class TestPromRangeBounds:
+    """`prom_range` must refuse windows / step combos that would pull
+    millions of samples — the upstream Prometheus endpoint will happily
+    serve a year of 1-second data and OOM the agent."""
+
+    async def test_prom_range_rejects_oversized_lookback(self) -> None:
+        # 30-day window > MAX_RANGE_LOOKBACK_S (1 week).
+        async with _client_with(lambda req: httpx.Response(200)) as c:
+            with pytest.raises(ValueError, match="MAX_RANGE_LOOKBACK_S"):
+                await queries.prom_range(
+                    c,
+                    PROM,
+                    "up",
+                    "2026-04-01T00:00:00Z",
+                    "2026-05-01T00:00:00Z",
+                    step="60s",
+                )
+
+    async def test_prom_range_rejects_oversized_sample_count(self) -> None:
+        # 1 day at 1s resolution = 86400 samples >> MAX_RANGE_SAMPLES (10k).
+        async with _client_with(lambda req: httpx.Response(200)) as c:
+            with pytest.raises(ValueError, match="samples"):
+                await queries.prom_range(
+                    c,
+                    PROM,
+                    "up",
+                    "2026-04-29T00:00:00Z",
+                    "2026-04-30T00:00:00Z",
+                    step="1s",
+                )
+
+    async def test_prom_range_rejects_inverted_window(self) -> None:
+        async with _client_with(lambda req: httpx.Response(200)) as c:
+            with pytest.raises(ValueError, match="end must be after start"):
+                await queries.prom_range(
+                    c,
+                    PROM,
+                    "up",
+                    "2026-04-29T03:00:00Z",
+                    "2026-04-29T02:00:00Z",
+                )
+
+    async def test_prom_range_rejects_invalid_timestamp(self) -> None:
+        async with _client_with(lambda req: httpx.Response(200)) as c:
+            with pytest.raises(ValueError, match="start"):
+                await queries.prom_range(c, PROM, "up", "now-1h", "now")
+
+    async def test_prom_range_accepts_unix_epoch(self) -> None:
+        body = _prom_response("matrix", [])
+        async with _client_with(lambda req: httpx.Response(200, json=body)) as c:
+            await queries.prom_range(c, PROM, "up", "1700000000", "1700003600", step="30s")
 
 
 # ---------------------------------------------------------------------------
@@ -639,7 +696,7 @@ class TestRequestParams:
             return httpx.Response(200, json=_prom_response("matrix", []))
 
         async with _client_with(handler) as c:
-            await queries.prom_range(c, PROM, "up", "now-5m", "now", step="60s")
+            await queries.prom_range(c, PROM, "up", "1700000000", "1700000300", step="60s")
         assert captured[0].url.params["step"] == "60s"
         assert captured[0].url.params["query"] == "up"
 

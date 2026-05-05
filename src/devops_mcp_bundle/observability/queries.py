@@ -35,6 +35,38 @@ def _check(resp: httpx.Response, what: str) -> dict[str, Any]:
     return body
 
 
+# Outer bounds for `prom_range`. The endpoint will happily return millions of
+# samples if a caller asks for a year of 1-second resolution data; an agent
+# with a context window can't usefully consume that and the bytes don't
+# survive the round-trip anyway. Refuse loud rather than silently clamp so
+# the caller knows to tighten the window or step.
+MAX_RANGE_LOOKBACK_S = 7 * 24 * 3600  # 1 week
+MAX_RANGE_SAMPLES = 10_000
+
+
+def _parse_prom_time(value: str, name: str) -> float:
+    """Parse a Prometheus `time` arg (RFC3339 or unix-seconds) to epoch float.
+
+    Prometheus accepts both forms on `/api/v1/query_range`; we mirror that
+    so the caller doesn't have to think about it. Returns the value in
+    epoch seconds.
+    """
+    s = str(value).strip()
+    if not s:
+        raise ValueError(f"{name} must not be blank")
+    # Try unix-epoch first — pure-numeric or float-shaped.
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    # Fall back to RFC3339 / ISO 8601. `Z` is a common shorthand
+    # `datetime.fromisoformat` accepts since 3.11.
+    try:
+        return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except ValueError as e:
+        raise ValueError(f"invalid {name}={value!r}: expected RFC3339 or unix epoch") from e
+
+
 # ---------------------------------------------------------------------------
 # Prometheus
 # ---------------------------------------------------------------------------
@@ -57,9 +89,36 @@ async def prom_range(
     end: str,
     step: str = "15s",
 ) -> list[PromSeries]:
-    """Run a range Prometheus query. `start`/`end` are RFC3339 or Unix epoch."""
+    """Run a range Prometheus query. `start`/`end` are RFC3339 or Unix epoch.
+
+    The window (`end - start`) is capped at ``MAX_RANGE_LOOKBACK_S`` and
+    the implied sample count (``window / step``) at ``MAX_RANGE_SAMPLES``.
+    Both limits raise ``ValueError`` rather than silently clamping so a
+    caller asking for a year of 1-second data finds out *why* the
+    request was refused — the alternative is a quietly-truncated answer
+    that an agent treats as authoritative.
+    """
     if not promql.strip():
         raise ValueError("promql must not be blank")
+    start_s = _parse_prom_time(start, "start")
+    end_s = _parse_prom_time(end, "end")
+    window_s = end_s - start_s
+    if window_s <= 0:
+        raise ValueError(f"end must be after start; got start={start!r} end={end!r}")
+    if window_s > MAX_RANGE_LOOKBACK_S:
+        raise ValueError(
+            f"requested window {int(window_s)}s exceeds MAX_RANGE_LOOKBACK_S "
+            f"({MAX_RANGE_LOOKBACK_S}s); shrink the range or use prom_query"
+        )
+    step_s = _parse_duration(step).total_seconds()
+    if step_s <= 0:
+        raise ValueError(f"step must be a positive duration, got {step!r}")
+    samples = window_s / step_s
+    if samples > MAX_RANGE_SAMPLES:
+        raise ValueError(
+            f"requested resolution would yield {int(samples)} samples (>"
+            f"{MAX_RANGE_SAMPLES}); increase step or shrink window"
+        )
     resp = await client.get(
         f"{prom_url}/api/v1/query_range",
         params={"query": promql, "start": start, "end": end, "step": step},
