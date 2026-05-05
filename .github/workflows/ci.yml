@@ -51,3 +51,48 @@ jobs:
 
       - name: Unit tests
         run: uv run pytest -m "not integration" --cov --cov-report=term
+
+  postgres-integration:
+    # The Layer-2 safety story (DB-side default_transaction_read_only,
+    # SET LOCAL statement_timeout, classifier-miss rejection) lives in
+    # tests/test_postgres/test_queries_integration.py — without a
+    # Postgres service in CI those assertions never gate PRs, and a
+    # change to the connection setup could regress silently. Run them
+    # in parallel with the unit-test job; both gate merges to main.
+    #
+    # Timing budget: well under 60s for the integration subset. The
+    # slow-query cancellation test sleeps ~100ms server-side; the rest
+    # are sub-second.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bench
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: bench
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U bench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES_DSN: postgresql://bench:bench@localhost:5433/bench
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync dev deps
+        run: uv sync --extra dev --python 3.12
+
+      - name: Integration tests
+        run: uv run pytest -m integration tests/test_postgres/ -v
