@@ -229,6 +229,15 @@ def _parse_prom_data(data: dict[str, Any]) -> list[PromSeries]:
 # ---------------------------------------------------------------------------
 
 
+# Outer bounds for `loki_query`. The endpoint will paginate through
+# huge log volumes if asked, and the in-memory sort below holds every
+# returned entry before truncating — both vectors a caller can abuse.
+# Refuse rather than silently clamp so the caller knows the answer
+# would have been incomplete.
+MAX_LOKI_LIMIT = 5000
+MAX_LOKI_LOOKBACK_S = 24 * 3600  # 1 day
+
+
 async def loki_query(
     client: httpx.AsyncClient,
     loki_url: str,
@@ -236,11 +245,30 @@ async def loki_query(
     since: str = "1h",
     limit: int = 100,
 ) -> list[LogEntry]:
-    """Run a LogQL query against Loki's `/loki/api/v1/query_range` endpoint."""
+    """Run a LogQL query against Loki's `/loki/api/v1/query_range` endpoint.
+
+    `limit` and `since` are bounded by ``MAX_LOKI_LIMIT`` (5000 entries)
+    and ``MAX_LOKI_LOOKBACK_S`` (1 day) respectively. Both raise
+    ``ValueError`` rather than clamp so a caller asking for a week of
+    debug logs at limit=100000 sees *why* the request was refused — the
+    in-memory sort below holds every returned entry before truncating,
+    so silently clamping would still risk an OOM on the way down.
+    """
     if not logql.strip():
         raise ValueError("logql must not be blank")
     if limit <= 0:
         raise ValueError("limit must be positive")
+    if limit > MAX_LOKI_LIMIT:
+        raise ValueError(
+            f"limit={limit} exceeds MAX_LOKI_LIMIT ({MAX_LOKI_LIMIT}); "
+            "narrow the query and re-run rather than asking for more in one call"
+        )
+    since_s = _parse_duration(since).total_seconds()
+    if since_s > MAX_LOKI_LOOKBACK_S:
+        raise ValueError(
+            f"since={since!r} ({int(since_s)}s) exceeds MAX_LOKI_LOOKBACK_S "
+            f"({MAX_LOKI_LOOKBACK_S}s); shrink the window or use a more selective query"
+        )
 
     end = dt.datetime.now(dt.UTC)
     start = end - _parse_duration(since)
@@ -261,6 +289,14 @@ async def loki_query(
         for entry in stream.get("values", []):
             ts_ns, line = entry
             out.append(LogEntry(timestamp_ns=int(ts_ns), line=line, stream=labels))
+            # Belt-and-suspenders: if a misbehaving Loki returns more
+            # than `limit` entries (e.g. the upstream's per-stream limit
+            # is per-stream, not aggregate), bail before the sort
+            # rather than holding 10x the requested rows in memory.
+            if len(out) >= limit * 2:
+                break
+        if len(out) >= limit * 2:
+            break
     out.sort(key=lambda e: e.timestamp_ns, reverse=True)
     return out[:limit]
 

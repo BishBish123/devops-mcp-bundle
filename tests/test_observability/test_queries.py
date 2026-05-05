@@ -208,6 +208,31 @@ class TestLokiQuery:
                 await queries.loki_query(c, LOKI, '{app="api"}', limit=0)
 
 
+class TestLokiQueryBounds:
+    """`loki_query` must refuse limit / since combos that would force
+    the in-memory sort to hold orders of magnitude more entries than
+    the agent can consume."""
+
+    async def test_loki_query_rejects_oversized_limit(self) -> None:
+        async with _client_with(lambda req: httpx.Response(200)) as c:
+            with pytest.raises(ValueError, match="MAX_LOKI_LIMIT"):
+                await queries.loki_query(c, LOKI, '{app="api"}', limit=10_000)
+
+    async def test_loki_query_rejects_oversized_since(self) -> None:
+        # 7d lookback > MAX_LOKI_LOOKBACK_S (1d).
+        async with _client_with(lambda req: httpx.Response(200)) as c:
+            with pytest.raises(ValueError, match="MAX_LOKI_LOOKBACK_S"):
+                await queries.loki_query(c, LOKI, '{app="api"}', since="7d")
+
+    async def test_loki_query_accepts_default_window(self) -> None:
+        # Default 1h since + 100 limit must still pass — pin the
+        # bounds aren't accidentally too tight.
+        body = {"status": "success", "data": {"result": []}}
+        async with _client_with(lambda req: httpx.Response(200, json=body)) as c:
+            entries = await queries.loki_query(c, LOKI, '{app="api"}')
+        assert entries == []
+
+
 class TestParseDuration:
     @pytest.mark.parametrize(
         ("s", "secs"),
