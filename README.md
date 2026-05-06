@@ -95,32 +95,45 @@ uv run mcp-postgres-dba --transport http --port 8080
 
 ## Tool surface
 
-### postgres-dba (6 tools)
+Counts below are the source of truth — verify with
+`grep -c "@mcp.tool" src/devops_mcp_bundle/<server>/server.py` if you
+suspect drift.
+
+### postgres-dba (10 tools)
 
 - `list_databases()` — sizes + owners from `pg_database`
 - `list_tables(schema)` — row estimate + on-disk size, scoped to a schema
 - `describe_table(qualified_name)` — columns + indexes (incl. `pg_get_indexdef`)
 - `slow_queries(min_mean_ms=100, limit=20)` — `pg_stat_statements` top-N (returns `[]` if extension missing)
 - `vacuum_status(qualified_name)` — last vacuum/analyze + dead-tuple counts
-- `run_safe_query(sql, timeout_ms=5000, row_cap=1000)` — parser-validated SELECT, server-side `default_transaction_read_only=on` enforced
+- `activity_snapshot(min_runtime_ms=0, exclude_idle=False)` — `pg_stat_activity` rows narrowed to triage columns
+- `bloat_estimate(schema="public", min_ratio=0.0)` — ioguix-style bloat approximation (no `pgstattuple` needed)
+- `kill_query(pid)` — refusal-by-design; returns the `pg_cancel_backend`/`pg_terminate_backend` SQL the user could run themselves
+- `classify_statement(sql)` — exposes the safety classifier so an agent can preview *why* a SELECT would be rejected
+- `run_safe_query(sql, timeout_ms=5000, row_cap=1000)` — parser-validated SELECT, server-side `default_transaction_read_only=on` + `SET LOCAL statement_timeout` enforced; rows pulled through a server-side cursor capped at `row_cap + 1`
 
-### k8s-inspector (7 tools)
+### k8s-inspector (10 tools)
 
-- `list_namespaces()`, `list_pods(namespace, label_selector)`
-- `describe_pod(namespace, name)` — containers + conditions + labels
-- `pod_logs(namespace, name, container, tail=200)` — RFC3339 timestamp parsing
+- `list_namespaces()`
+- `list_pods(namespace, label_selector)` — labels, restart counts, ready state
+- `describe_pod(namespace, name)` — containers + conditions + labels + `creation_timestamp`
+- `pod_logs(namespace, name, container, tail=200)` — RFC3339 timestamp parsing; tail capped at 10k lines
 - `pod_events(namespace, name)` — events filtered to involved object
 - `top_pods(namespace)` — live CPU + memory (degrades to `[]` if no metrics-server)
 - `recent_oomkills(namespace, since_min=60)`
+- `list_configmaps(namespace)` — names + key counts; flags GCP/AWS/mTLS-style secret keys
+- `namespace_events(...)` — recent events scoped to a namespace
+- `resource_quotas(namespace)` — used vs. hard limits per quota object
 
 ### observability (8 tools)
 
-- `prom_query(promql)`, `prom_range(promql, start, end, step)` — instant + range PromQL
+- `prom_query(promql)` — instant PromQL
+- `prom_range(promql, start, end, step)` — range PromQL; window capped at 1 week, samples capped at 10k
 - `prom_alerts()` — firing/pending alerts
 - `prom_targets(state="active")` — scrape-target health (active|dropped|any)
-- `loki_query(logql, since="1h", limit=100)` — LogQL, sorted descending
+- `loki_query(logql, since="1h", limit=100)` — LogQL, sorted descending; since capped at 1d, limit at 5k
 - `slo_status(service, objective, success_query, total_query, window)` — actual + burn-rate from caller-supplied PromQL
-- `multi_window_burn_rate(objective, long_burn_query, short_burn_query, …)` — Google SRE-workbook two-window page
+- `multi_window_burn_rate(objective, long_burn_query, short_burn_query, …)` — Google SRE-workbook two-window page + ticket
 - `compare_windows(promql_a, promql_b)` — delta + percent change between two PromQL expressions
 
 The `escape_logql_label(value)` and `render_logql(template, **labels)`
