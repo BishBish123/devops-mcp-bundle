@@ -85,6 +85,22 @@ class TestPromQuery:
             with pytest.raises(ValueError, match="promql"):
                 await queries.prom_query(c, PROM, "  ")
 
+    async def test_prom_query_rejects_oversized_series_count(self) -> None:
+        # A wide selector against a busy Prometheus can return tens of
+        # thousands of series. The cap fires *after* parsing, before the
+        # caller ever sees the result, so a runaway query can't poison
+        # the agent's context.
+        oversized = _prom_response(
+            "vector",
+            [
+                {"metric": {"job": f"j{i}"}, "value": [1700000000.0, "1"]}
+                for i in range(queries.MAX_PROM_SERIES + 1)
+            ],
+        )
+        async with _client_with(lambda req: httpx.Response(200, json=oversized)) as c:
+            with pytest.raises(ValueError, match="exceeds cap"):
+                await queries.prom_query(c, PROM, '{__name__=~".+"}')
+
 
 class TestPromRangeBounds:
     """`prom_range` must refuse windows / step combos that would pull

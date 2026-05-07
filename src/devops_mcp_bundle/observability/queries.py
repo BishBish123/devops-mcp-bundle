@@ -43,6 +43,13 @@ def _check(resp: httpx.Response, what: str) -> dict[str, Any]:
 MAX_RANGE_LOOKBACK_S = 7 * 24 * 3600  # 1 week
 MAX_RANGE_SAMPLES = 10_000
 
+# Outer bound for `prom_query`. An instant query against a wide selector
+# (e.g. `{__name__=~".+"}`) can return tens of thousands of series — the
+# context window can't usefully consume that and the agent will burn a
+# lot of tokens on noise. Refuse rather than silently truncate so the
+# caller learns to tighten the selector.
+MAX_PROM_SERIES = 5_000
+
 
 def _parse_prom_time(value: str, name: str) -> float:
     """Parse a Prometheus `time` arg (RFC3339 or unix-seconds) to epoch float.
@@ -73,12 +80,26 @@ def _parse_prom_time(value: str, name: str) -> float:
 
 
 async def prom_query(client: httpx.AsyncClient, prom_url: str, promql: str) -> list[PromSeries]:
-    """Run an instant Prometheus query."""
+    """Run an instant Prometheus query.
+
+    The result set is capped at ``MAX_PROM_SERIES`` series. A wide
+    selector like ``{__name__=~".+"}`` can return tens of thousands of
+    series, which the agent can't usefully consume and which costs real
+    bytes on the round-trip. Exceeding the cap raises ``ValueError``
+    rather than silently truncating so the caller knows to narrow the
+    selector.
+    """
     if not promql.strip():
         raise ValueError("promql must not be blank")
     resp = await client.get(f"{prom_url}/api/v1/query", params={"query": promql})
     body = _check(resp, "prom_query")
-    return _parse_prom_data(body["data"])
+    series = _parse_prom_data(body["data"])
+    if len(series) > MAX_PROM_SERIES:
+        raise ValueError(
+            f"prom_query returned {len(series)} series, exceeds cap "
+            f"{MAX_PROM_SERIES}; tighten the query"
+        )
+    return series
 
 
 async def prom_range(
