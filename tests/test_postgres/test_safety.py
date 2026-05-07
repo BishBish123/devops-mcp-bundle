@@ -229,3 +229,29 @@ class TestSideEffectingFunctionDenylist:
         c = classify_sql("WITH x AS (SELECT pg_terminate_backend(123)) SELECT * FROM x")
         assert c.is_read_only is False
         assert "pg_terminate_backend" in c.reason
+
+    def test_classifier_rejects_quoted_pg_advisory_lock(self) -> None:
+        # PG quoted identifiers preserve case at the parser level but the
+        # safety matcher treats them as case-insensitive — quoting must
+        # not be a bypass for the denylist.
+        c = classify_sql('SELECT "pg_advisory_lock"(1)')
+        assert c.is_read_only is False
+        assert "pg_advisory_lock" in c.reason
+
+    def test_classifier_rejects_quoted_pg_cancel_backend(self) -> None:
+        c = classify_sql('SELECT "pg_cancel_backend"(123)')
+        assert c.is_read_only is False
+        assert "pg_cancel_backend" in c.reason
+
+    def test_classifier_rejects_mixed_case_quoted_call(self) -> None:
+        # Mixed-case quoted identifiers must still match — the denylist
+        # is keyed on lowercase canonical names.
+        c = classify_sql('SELECT "PG_TERMINATE_BACKEND"(123)')
+        assert c.is_read_only is False
+        assert "pg_terminate_backend" in c.reason
+
+    def test_classifier_allows_quoted_legitimate_function(self) -> None:
+        # A user-defined function whose quoted name is not on the
+        # denylist must still parse as read-only. This guards against
+        # an over-eager normalizer that would reject all quoted calls.
+        assert is_read_only_sql('SELECT "my_helper"()')

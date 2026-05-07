@@ -19,7 +19,7 @@ the server-side flag catches everything the parser misses.
 from __future__ import annotations
 
 import sqlparse
-from sqlparse.tokens import DDL, DML, Keyword, Name, Punctuation
+from sqlparse.tokens import DDL, DML, Keyword, Name, Punctuation, String
 
 # Statement-leading tokens we consider read-only. SELECT and friends.
 # `ANALYZE` is *not* in this set even though it returns no rows — it
@@ -286,24 +286,40 @@ def classify_sql(sql: str) -> Classification:
     return Classification(True, leading, f"{leading} is read-only")
 
 
+def _normalize_identifier(value: str) -> str:
+    """Return `value` with surrounding double quotes stripped, lowercased.
+
+    Postgres quoted identifiers (`"pg_terminate_backend"`) preserve case
+    and are syntactically distinct from bareword identifiers, but for
+    the purposes of the side-effect denylist we treat them as
+    case-insensitive: the underlying builtin is the same function
+    regardless of how it was spelled at the call site, and an attacker
+    could otherwise smuggle a denylisted call past the matcher just by
+    quoting it (`"pg_advisory_lock"(1)` vs `pg_advisory_lock(1)`).
+    """
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        value = value[1:-1].replace('""', '"')
+    return value.lower()
+
+
 def _find_side_effecting_call(flat: list[sqlparse.sql.Token]) -> str | None:
     """Return the name of the first denylisted function called in `flat`.
 
     `flat` is the output of `Statement.flatten()` — a flat sequence of
-    leaf tokens. A function call lexes as `Name "fn"` then optional
-    whitespace then `Punctuation "("`. We walk pairwise; matching is
-    case-insensitive (sqlparse leaves identifiers in their original
-    casing).
+    leaf tokens. A function call lexes as either `Name "fn"` (bareword)
+    or `String.Symbol "\"fn\""` (quoted identifier), then optional
+    whitespace then `Punctuation "("`. Both forms are normalized to a
+    lowercase, unquoted name before being matched against the denylist
+    so quoting cannot bypass the check.
     """
     for i, token in enumerate(flat):
-        # Identifiers are tagged Token.Name; quoted identifiers come
-        # through too but we want raw bareword function names — quoted
-        # identifiers (`"pg_terminate_backend"`) bypass our matcher,
-        # which is acceptable because Postgres treats them as
-        # case-sensitive and operators rarely use them for builtin calls.
-        if token.ttype is not Name:
+        # Bareword function names lex as Token.Name; quoted identifiers
+        # (`"pg_terminate_backend"`) lex as Token.Literal.String.Symbol.
+        # We accept both — the normalizer strips quotes and lowercases,
+        # so either form falls into the same denylist comparison.
+        if token.ttype is not Name and token.ttype is not String.Symbol:
             continue
-        name: str = str(token.value).lower()
+        name = _normalize_identifier(str(token.value))
         if name not in _SIDE_EFFECTING_FUNCTIONS:
             continue
         # Look ahead for `(`, skipping whitespace. If the next non-space
