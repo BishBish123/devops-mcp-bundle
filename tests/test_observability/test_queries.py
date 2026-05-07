@@ -459,6 +459,37 @@ class TestPromTargets:
         # Dropped entry uses the sentinel.
         assert targets[1].health == "dropped"
 
+    async def test_prom_targets_rejects_unbounded_huge_result(self) -> None:
+        # A `kubernetes-pods` discovery on a large cluster can produce
+        # tens of thousands of dropped targets after relabel rules. The
+        # cap fires only when limit is None — passing an explicit limit
+        # is a deliberate caller decision to truncate.
+        body = {
+            "status": "success",
+            "data": {
+                "activeTargets": [
+                    {
+                        "labels": {"job": f"j{i}", "instance": f"10.0.0.{i % 256}:9090"},
+                        "health": "up",
+                        "lastScrape": "2026-04-29T03:00:00Z",
+                        "lastError": "",
+                    }
+                    for i in range(queries.MAX_PROM_TARGETS + 1)
+                ],
+            },
+        }
+        async with _client_with(lambda req: httpx.Response(200, json=body)) as c:
+            with pytest.raises(ValueError, match="exceeds cap"):
+                await queries.prom_targets(c, PROM)
+            # With an explicit limit the same payload truncates cleanly.
+            truncated = await queries.prom_targets(c, PROM, limit=10)
+        assert len(truncated) == 10
+
+    async def test_prom_targets_rejects_non_positive_limit(self) -> None:
+        async with _client_with(lambda req: httpx.Response(200)) as c:
+            with pytest.raises(ValueError, match="limit"):
+                await queries.prom_targets(c, PROM, limit=0)
+
     async def test_unknown_health_passthrough(self) -> None:
         # The `health` field on an active target is whatever Prometheus
         # gave us — including the literal string "unknown" — and must

@@ -50,6 +50,13 @@ MAX_RANGE_SAMPLES = 10_000
 # caller learns to tighten the selector.
 MAX_PROM_SERIES = 5_000
 
+# Outer bound for `prom_targets`. A large cluster running kubernetes-pods
+# service-discovery can have tens of thousands of dropped targets after
+# relabel rules kick in. The unbounded result was the same context-window
+# foot-gun as `prom_query` — caller asks for "any" and gets back 50k
+# entries that nothing downstream can use.
+MAX_PROM_TARGETS = 10_000
+
 
 def _parse_prom_time(value: str, name: str) -> float:
     """Parse a Prometheus `time` arg (RFC3339 or unix-seconds) to epoch float.
@@ -149,7 +156,10 @@ async def prom_range(
 
 
 async def prom_targets(
-    client: httpx.AsyncClient, prom_url: str, state: str = "active"
+    client: httpx.AsyncClient,
+    prom_url: str,
+    state: str = "active",
+    limit: int | None = None,
 ) -> list[Target]:
     """List scrape targets from `/api/v1/targets`.
 
@@ -164,9 +174,19 @@ async def prom_targets(
     ``droppedTargets`` because a relabel rule kicked it out. The earlier
     revision only read ``activeTargets``, which silently returned an
     empty list for ``state="dropped"`` and ``state="any"``.
+
+    If ``limit`` is None the result is capped at ``MAX_PROM_TARGETS`` and
+    exceeding the cap raises ``ValueError`` — large clusters with a busy
+    `kubernetes-pods` discovery can produce tens of thousands of dropped
+    entries that nothing downstream can use. If the caller passes
+    ``limit`` explicitly the result is truncated to
+    ``min(limit, MAX_PROM_TARGETS)`` (an explicit-limit caller has
+    already told us they're OK with a partial answer).
     """
     if state not in {"active", "dropped", "any"}:
         raise ValueError(f"state must be one of active|dropped|any, got {state!r}")
+    if limit is not None and limit <= 0:
+        raise ValueError("limit must be positive")
     resp = await client.get(f"{prom_url}/api/v1/targets", params={"state": state})
     body = _check(resp, "prom_targets")
     data = body["data"]
@@ -202,7 +222,14 @@ async def prom_targets(
                     origin="dropped",
                 )
             )
-    return out
+    if limit is None:
+        if len(out) > MAX_PROM_TARGETS:
+            raise ValueError(
+                f"prom_targets returned {len(out)} entries, exceeds cap "
+                f"{MAX_PROM_TARGETS}; pass an explicit `limit` or filter by state"
+            )
+        return out
+    return out[: min(limit, MAX_PROM_TARGETS)]
 
 
 async def prom_alerts(client: httpx.AsyncClient, prom_url: str) -> list[Alert]:

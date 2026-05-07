@@ -77,10 +77,17 @@ async def prom_alerts() -> list[Alert]:
 
 
 @mcp.tool
-async def prom_targets(state: str = "active") -> list[Target]:
-    """List Prometheus scrape targets (active|dropped|any) with health + last error."""
+async def prom_targets(state: str = "active", limit: int | None = None) -> list[Target]:
+    """List Prometheus scrape targets (active|dropped|any) with health + last error.
+
+    Pass ``limit`` to truncate to the first N entries (capped at
+    ``MAX_PROM_TARGETS``). With no limit the result is bounded by
+    ``MAX_PROM_TARGETS`` and exceeding it raises — large clusters with a
+    busy `kubernetes-pods` discovery can produce tens of thousands of
+    dropped entries.
+    """
     async with _client() as c:
-        return await queries.prom_targets(c, _prom_url(), state=state)
+        return await queries.prom_targets(c, _prom_url(), state=state, limit=limit)
 
 
 @mcp.tool
