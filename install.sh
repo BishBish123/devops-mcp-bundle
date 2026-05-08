@@ -33,16 +33,33 @@ case "$PYV" in
     *) die "need python 3.11 or 3.12, found ${PYV}";;
 esac
 
+# A previous run may have left a half-built venv (e.g. ^C between
+# `python -m venv` and `pip install`). Treat the directory's existence
+# as a hint, not proof — if the interpreter or pip is missing we
+# rebuild from scratch rather than try to repair-in-place.
+if [ -d "$VENV" ] && { [ ! -x "$VENV/bin/python" ] || [ ! -x "$VENV/bin/pip" ]; }; then
+    warn "found a partial/broken venv at $VENV (missing python or pip); recreating"
+    rm -rf "$VENV"
+fi
 if [ ! -d "$VENV" ]; then
     bold "creating venv at $VENV"
     python3 -m venv "$VENV"
 fi
+[ -x "$VENV/bin/python" ] || die "venv at $VENV is missing bin/python after creation"
+[ -x "$VENV/bin/pip" ]    || die "venv at $VENV is missing bin/pip after creation"
 "$VENV/bin/pip" install --upgrade pip >/dev/null
 ok "venv ready"
 
 bold "installing devops-mcp-bundle from $PIP_SOURCE"
 "$VENV/bin/pip" install --upgrade "$PIP_SOURCE" >/dev/null \
     || die "pip install failed — try PIP_SOURCE=<your-spec> $0 (e.g. a local checkout, a tag, or a fork)"
+
+# Smoke-check the install: the entry point has to actually run. A pip
+# install can succeed with a missing dependency or a broken script
+# shebang; catching that here is cheaper than a confused user later.
+if ! "$VENV/bin/devops-mcp" version >/dev/null 2>&1; then
+    die "post-install smoke check failed: $VENV/bin/devops-mcp version did not run cleanly"
+fi
 ok "devops-mcp-bundle installed"
 
 LINK_DIR="${HOME}/.local/bin"
