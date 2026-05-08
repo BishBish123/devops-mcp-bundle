@@ -56,6 +56,6 @@ grep -E "loki_query" transcript.jsonl
 | Scenario | Expected behaviour |
 | --- | --- |
 | Deploy was less than 5 minutes ago | Either widen the "after" window to ≥ 15 min before claiming regression, or say "too soon to tell". |
-| User gives a SHA, not a timestamp | Resolve via `kubectl rollout history` or git; if neither works, ask. |
+| User gives a SHA, not a timestamp | The bundle has no shell access, so the skill cannot resolve a SHA on its own. Ask the user for the deploy timestamp directly — or, if the deploy was recorded as a Prometheus annotation (`deploy_info{sha="..."}` or similar), surface it via `prom_query` and confirm the timestamp before continuing. |
 | Service has no SLO defined | Don't fabricate one. Compute deltas in absolute units (ms, %), not as "burn rate". |
 | Multiple deploys in the window | Either pick the user-named deploy explicitly, or show all of them on the timeline and let the user say which. |
