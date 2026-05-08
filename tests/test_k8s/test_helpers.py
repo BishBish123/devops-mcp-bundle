@@ -149,6 +149,63 @@ class TestNamespaceEvents:
         with pytest.raises(ValueError, match="since_min"):
             await queries.namespace_events(api, "prod", since_min=0)
 
+    async def test_namespace_events_default_bounded_lookback(self) -> None:
+        # The default is now 60min, not unbounded. An ancient event must
+        # be filtered out without the caller having to ask.
+        api = AsyncMock()
+        api.list_namespaced_event.return_value = _ns(
+            items=[
+                _ns(
+                    type="Warning",
+                    reason="BackOff",
+                    message="recent",
+                    count=1,
+                    last_timestamp=_utc(60),
+                    event_time=None,
+                    involved_object=_ns(kind="Pod", name="web-0"),
+                ),
+                _ns(
+                    type="Warning",
+                    reason="BackOff",
+                    message="ancient",
+                    count=1,
+                    # 5h ago — outside the new 60min default window.
+                    last_timestamp=_utc(60 * 60 * 5),
+                    event_time=None,
+                    involved_object=_ns(kind="Pod", name="web-1"),
+                ),
+            ]
+        )
+        out = await queries.namespace_events(api, "prod")
+        assert [e.message for e in out] == ["recent"]
+
+    async def test_namespace_events_rejects_oversized_request(self) -> None:
+        # A node rolling-restart on a busy `kube-system` can produce
+        # tens of thousands of events. Refuse rather than try to hold
+        # them all in memory and post-filter.
+        api = AsyncMock()
+        api.list_namespaced_event.return_value = _ns(
+            items=[
+                _ns(
+                    type="Warning",
+                    reason="BackOff",
+                    message=f"e{i}",
+                    count=1,
+                    last_timestamp=_utc(60),
+                    event_time=None,
+                    involved_object=_ns(kind="Pod", name=f"web-{i}"),
+                )
+                for i in range(queries.MAX_EVENTS + 1)
+            ]
+        )
+        with pytest.raises(ValueError, match="exceeds limit"):
+            await queries.namespace_events(api, "prod")
+
+    async def test_namespace_events_rejects_oversized_limit(self) -> None:
+        api = AsyncMock()
+        with pytest.raises(ValueError, match="MAX_EVENTS"):
+            await queries.namespace_events(api, "prod", limit=queries.MAX_EVENTS + 1)
+
 
 # ---------------------------------------------------------------------------
 # resource_quotas

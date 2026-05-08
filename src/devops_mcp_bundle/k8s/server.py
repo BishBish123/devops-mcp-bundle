@@ -135,15 +135,25 @@ async def list_configmaps(namespace: str) -> list[ConfigMapInfo]:
 
 @mcp.tool
 async def namespace_events(
-    namespace: str, only_warnings: bool = True, since_min: int | None = None
+    namespace: str,
+    only_warnings: bool = True,
+    since_min: int = 60,
+    limit: int = queries.MAX_EVENTS,
 ) -> list[Event]:
-    """Cluster events for `namespace` (Warning-only by default)."""
+    """Cluster events for `namespace` (Warning-only by default).
+
+    `since_min` defaults to a 1h lookback; pass a smaller value for a
+    tighter window. `limit` caps the materialised result at
+    ``MAX_EVENTS``; the call raises rather than silently truncates if the
+    upstream returns more entries.
+    """
     async with _api() as (core, _):
         return await queries.namespace_events(
             core,  # type: ignore[arg-type]
             namespace,
             only_warnings=only_warnings,
             since_min=since_min,
+            limit=limit,
         )
 
 

@@ -333,33 +333,64 @@ async def list_configmaps(api: CoreV1Api, namespace: str) -> list[ConfigMapInfo]
     return out
 
 
+# Outer cap on `namespace_events`. The K8s events endpoint will happily
+# stream the entire 1h retention window (default upstream), and a busy
+# `kube-system` can produce tens of thousands of entries during a node
+# rolling-restart. The agent can't usefully consume that, and the
+# in-memory loop below holds every entry before the time-filter runs.
+MAX_EVENTS = 1000
+
+
 async def namespace_events(
     api: CoreV1Api,
     namespace: str,
     only_warnings: bool = True,
-    since_min: int | None = None,
+    since_min: int = 60,
+    limit: int = MAX_EVENTS,
 ) -> list[Event]:
     """Return cluster events in `namespace`, by default Warning-only.
 
     `pod_events` is scoped to one object; this helper is the cluster-wide
     sweep — useful for "what's been going wrong in `prod` for the last
     hour?". `only_warnings=False` includes Normal events too.
+
+    The default ``since_min=60`` (1h lookback) bounds how much history
+    the call materialises. Passing ``since_min`` is no longer optional
+    — earlier revisions accepted ``None`` and post-filtered after
+    materialising the entire retention window, which is unsafe on busy
+    clusters.
+
+    The K8s events endpoint does not support a `lastTimestamp` field
+    selector (only a small fixed set of fields are selectable), so the
+    time bound is enforced post-fetch. ``limit`` (default
+    ``MAX_EVENTS``) caps how many entries we hold in memory: if the
+    upstream returns more than ``limit`` items we raise rather than
+    silently truncate so the caller learns to narrow the namespace or
+    shorten ``since_min``.
     """
-    if since_min is not None and since_min <= 0:
-        raise ValueError("since_min must be positive when set")
+    if since_min <= 0:
+        raise ValueError("since_min must be positive")
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    if limit > MAX_EVENTS:
+        raise ValueError(f"limit={limit} exceeds MAX_EVENTS ({MAX_EVENTS})")
 
     field_selector = "type=Warning" if only_warnings else ""
     resp = await api.list_namespaced_event(namespace=namespace, field_selector=field_selector)
-    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=since_min) if since_min else None
+    if len(resp.items) > limit:
+        raise ValueError(
+            f"namespace_events: upstream returned {len(resp.items)} entries, "
+            f"exceeds limit {limit}; shorten since_min or filter by namespace"
+        )
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=since_min)
     out: list[Event] = []
     for e in resp.items:
         when = e.last_timestamp or e.event_time
-        if cutoff is not None:
-            if when is None:
-                continue
-            ts = when if when.tzinfo else when.replace(tzinfo=dt.UTC)
-            if ts < cutoff:
-                continue
+        if when is None:
+            continue
+        ts = when if when.tzinfo else when.replace(tzinfo=dt.UTC)
+        if ts < cutoff:
+            continue
         out.append(
             Event(
                 type=e.type or "Normal",
