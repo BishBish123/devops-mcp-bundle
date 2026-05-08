@@ -226,7 +226,9 @@ pre-commit run --all-files          # one-shot run
 ```
 
 The hooks run ruff (lint + format), mypy on push, and the full unit
-suite on push. They mirror what CI enforces.
+suite on push. They mirror the CI **unit + lint + type-check** jobs;
+the Postgres integration job runs only in CI (it requires a Postgres
+service container that the local hook can't spin up).
 
 ## License
 
