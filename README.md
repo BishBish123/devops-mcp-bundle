@@ -115,7 +115,7 @@ suspect drift.
 ### k8s-inspector (10 tools)
 
 - `list_namespaces()`
-- `list_pods(namespace, label_selector)` — labels, restart counts, ready state
+- `list_pods(namespace, label_selector)` — phase, node, age, restart count, ready state (filterable by `label_selector`; the response model carries no labels — call `describe_pod` for those)
 - `describe_pod(namespace, name)` — containers + conditions + labels + `creation_timestamp`
 - `pod_logs(namespace, name, container, tail=200)` — RFC3339 timestamp parsing; tail capped at 10k lines
 - `pod_events(namespace, name)` — events filtered to involved object
