@@ -187,14 +187,25 @@ make test-integration    # integration tests (needs Postgres at POSTGRES_DSN)
 make check               # lint + typecheck
 ```
 
-Coverage today:
-- 36 unit tests for the SQL safety classifier (CTE injection, multi-statement,
-  every mutating keyword, blank/whitespace input)
-- 24 unit tests for the K8s server using a mocked `CoreV1Api` /
-  `CustomObjectsApi`
-- 23 unit tests for the observability server using `httpx.MockTransport`
-  (every PromQL result type, error envelopes, duration parser, SLO burn-rate)
-- 9 integration tests against a real `pgvector/pgvector:pg17` container
+Coverage today (run `pytest --collect-only -q` for the live count;
+the numbers below are from that command at the time of writing,
+**306 tests total**):
+
+- **108 unit tests** for the Postgres layer: 70 against the SQL safety
+  classifier (CTE injection, multi-statement, every mutating keyword,
+  side-effecting function denylist, blank/whitespace input), 21 in the
+  read-only-SQL classifier, 11 in `run_safe_query`, and 6 helper tests
+- **108 unit tests** for the K8s server using a mocked `CoreV1Api` /
+  `CustomObjectsApi` (24 helpers, 56 parsers, 28 queries)
+- **67 unit tests** for the observability server using
+  `httpx.MockTransport` — every PromQL result type, error envelopes,
+  duration parser, SLO burn-rate, LogQL render/escape (65 queries + 2
+  server smoke)
+- **11 unit tests** for the top-level `devops-mcp` CLI (version,
+  list-servers, list-skills, install --dry-run, idempotent merge)
+- **12 integration tests**: 11 against a real Postgres 16 service
+  container (round-trip, row caps, `SET LOCAL` timeouts, classifier-miss
+  rejection), plus a wheel-build assertion that `SKILL.md` files ship
 
 ## Layout
 
