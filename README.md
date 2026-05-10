@@ -37,6 +37,19 @@ Each skill has a companion `EVAL.md` documenting the pass/fail
 conditions and transcript greps you can run to verify the agent did
 the right thing — see `skills/<name>/EVAL.md`.
 
+## Prerequisites
+
+| Tool | Version | Why |
+| --- | --- | --- |
+| **Python** | 3.11 or 3.12 (3.13 not yet supported) | The MCP SDK + asyncpg + kubernetes-asyncio stacks haven't all caught up to 3.13 yet; `requires-python = ">=3.11,<3.13"` enforces this in `pyproject.toml`. |
+| **uv** | ≥ 0.4 | Used by `make install`, `uv tool install`, and the CI matrix. Install with `curl -LsSf https://astral.sh/uv/install.sh \| sh`. |
+| **Docker** | any recent | Only required for `make up` (Postgres on `:5433`) and `make test-integration`. The unit suite (`make test`) needs neither Docker nor a DB. |
+
+macOS notes: the system `python3` is 3.9 and Homebrew's current `python3`
+is 3.13 — neither is in the supported range. Run
+`uv python install 3.12` (or `brew install python@3.12`) and pass the
+interpreter explicitly: `PYTHON=/opt/homebrew/opt/python@3.12/bin/python3.12 bash install.sh`.
+
 ## Install
 
 ```bash

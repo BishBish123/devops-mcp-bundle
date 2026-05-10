@@ -18,6 +18,11 @@ set -euo pipefail
 
 VENV="${HOME}/.local/share/devops-mcp-bundle"
 PIP_SOURCE="${PIP_SOURCE:-git+https://github.com/BishBish123/devops-mcp-bundle.git}"
+# Allow callers to point us at a specific interpreter — Homebrew's
+# `python3` is 3.13 today, and macOS still ships 3.9 as the system
+# `python3`. Both are outside our supported range; rather than fail
+# with no out, accept `PYTHON=/path/to/python3.12 bash install.sh`.
+PYTHON="${PYTHON:-python3}"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m✓\033[0m %s\n'  "$*"; }
@@ -26,11 +31,19 @@ die()  { printf '\033[31m✗\033[0m %s\n'  "$*" >&2; exit 1; }
 
 bold "devops-mcp-bundle installer"
 
-command -v python3 >/dev/null || die "python3 not found"
-PYV="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+command -v "$PYTHON" >/dev/null || die "interpreter '$PYTHON' not found on PATH (override with PYTHON=/path/to/python3.12 bash install.sh)"
+PYV="$("$PYTHON" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
 case "$PYV" in
-    3.11|3.12) ok "python ${PYV}";;
-    *) die "need python 3.11 or 3.12, found ${PYV}";;
+    3.11|3.12) ok "python ${PYV} (${PYTHON})";;
+    *)
+        die "need python 3.11 or 3.12, found ${PYV} (interpreter: ${PYTHON})
+
+Fix options (any one is enough):
+  - uv:      uv python install 3.12  &&  PYTHON=\"\$(uv python find 3.12)\" bash install.sh
+  - pyenv:   pyenv install 3.12  &&  PYTHON=\"\$(pyenv prefix 3.12)/bin/python3\" bash install.sh
+  - macOS:   brew install python@3.12  &&  PYTHON=/opt/homebrew/opt/python@3.12/bin/python3.12 bash install.sh
+  - manual:  PYTHON=/path/to/python3.12 bash install.sh"
+        ;;
 esac
 
 # A previous run may have left a half-built venv (e.g. ^C between
@@ -43,7 +56,7 @@ if [ -d "$VENV" ] && { [ ! -x "$VENV/bin/python" ] || [ ! -x "$VENV/bin/pip" ]; 
 fi
 if [ ! -d "$VENV" ]; then
     bold "creating venv at $VENV"
-    python3 -m venv "$VENV"
+    "$PYTHON" -m venv "$VENV"
 fi
 [ -x "$VENV/bin/python" ] || die "venv at $VENV is missing bin/python after creation"
 [ -x "$VENV/bin/pip" ]    || die "venv at $VENV is missing bin/pip after creation"
