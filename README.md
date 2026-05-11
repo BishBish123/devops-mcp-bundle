@@ -265,6 +265,18 @@ suite on push. They mirror the CI **unit + lint + type-check** jobs;
 the Postgres integration job runs only in CI (it requires a Postgres
 service container that the local hook can't spin up).
 
+## Known issues
+
+- **`notifications/initialized` returns `-32602` over FastMCP HTTP
+  transport.** The MCP spec defines this as a no-op notification —
+  client → server, no response expected — but FastMCP's HTTP transport
+  returns a `-32602 Invalid params` JSON-RPC error on receipt. The
+  notification is fire-and-forget by design, so the error is harmless:
+  the server is up, every subsequent `tools/list` and `tools/call`
+  works as documented. Ignore the spurious error in client logs. Stdio
+  transport is unaffected. Tracking upstream; nothing to do on this
+  side.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
