@@ -88,8 +88,9 @@ naive version is invisible.
       `transaction(readonly=True)` raises
       `ReadOnlySQLTransactionError` (Postgres SQLSTATE 25006).
   These run only when `POSTGRES_DSN` points at a live database (CI
-  spins up `pgvector/pgvector:pg17`); they're skipped on developer
-  machines without Docker.
+  spins up a `postgres:16` service container, matching the local
+  `docker-compose.yml`); they're skipped on developer machines without
+  Docker.
 
 ## Follow-ups
 
