@@ -1,0 +1,48 @@
+# Local backends for `make test-integration` and the stdio smoke test.
+#
+# Postgres maps to host :5433 to match POSTGRES_DSN in CI and the
+# README, so the same DSN works whether you're running unit tests
+# against this compose file or the GitHub Actions service container.
+# Prometheus + Loki are commented out — `make test-integration` only
+# needs Postgres today, and pulling images for backends nothing
+# integration-tests yet wastes the developer's bandwidth. Uncomment
+# the relevant block when an integration test grows that needs them.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: devops-mcp-postgres
+    environment:
+      POSTGRES_USER: bench
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: bench
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "bench", "-d", "bench"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # prometheus:
+  #   image: prom/prometheus:v2.55.0
+  #   container_name: devops-mcp-prometheus
+  #   ports:
+  #     - "9090:9090"
+  #   healthcheck:
+  #     test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 10
+
+  # loki:
+  #   image: grafana/loki:3.2.0
+  #   container_name: devops-mcp-loki
+  #   ports:
+  #     - "3100:3100"
+  #   command: -config.file=/etc/loki/local-config.yaml
+  #   healthcheck:
+  #     test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 10

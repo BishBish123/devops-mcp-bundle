@@ -42,8 +42,9 @@ test: ## Unit tests
 	$(UV) run pytest -m "not integration"
 
 .PHONY: test-integration
-test-integration: ## Integration tests (requires Postgres / k8s / Prom)
-	$(UV) run pytest -m integration
+test-integration: up ## Integration tests (brings up local Postgres via docker compose)
+	POSTGRES_DSN=$${POSTGRES_DSN:-postgresql://bench:bench@localhost:5433/bench} \
+		$(UV) run pytest -m integration
 
 .PHONY: test-all
 test-all: ## All tests
@@ -58,7 +59,7 @@ smoke: ## End-to-end smoke: import every server, validate tool surface, ensure n
 
 # ---- containers ----------------------------------------------------------
 .PHONY: up
-up: ## Bring up Postgres + Prometheus + Loki
+up: ## Bring up local Postgres on :5433 (see docker-compose.yml)
 	docker compose up -d --wait
 
 .PHONY: down
