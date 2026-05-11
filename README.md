@@ -84,7 +84,18 @@ devops-mcp install \
     --kubeconfig     "$KUBECONFIG"
 ```
 
-`devops-mcp install --dry-run` prints the merged config without writing it.
+Every flag falls back to the matching env var (`POSTGRES_DSN`,
+`PROMETHEUS_URL`, `LOKI_URL`, `KUBECONFIG`), so once you've exported
+them for the stdio smoke test you can re-run with no flags:
+
+```bash
+devops-mcp install                  # picks up the four env vars
+devops-mcp install --dry-run        # print the merged config, don't write
+devops-mcp install --validate       # SELECT 1 + /-/healthy + /ready before writing
+```
+
+`--validate` only probes the backends whose URL/DSN was provided; it's
+safe to run with a partial environment.
 
 ## Run a server standalone (stdio)
 

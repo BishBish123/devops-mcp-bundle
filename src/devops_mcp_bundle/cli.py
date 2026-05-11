@@ -8,6 +8,9 @@ import shutil
 from importlib import resources
 from pathlib import Path
 
+import anyio
+import asyncpg
+import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -124,23 +127,64 @@ def install(
         help="Path to the Claude Code MCP config file (will be created if missing).",
     ),
     pgvector_dsn: str | None = typer.Option(
-        None, help="POSTGRES_DSN to bake into the postgres-dba server entry."
+        None,
+        help=(
+            "POSTGRES_DSN to bake into the postgres-dba server entry. "
+            "Defaults to $POSTGRES_DSN if set."
+        ),
     ),
     prometheus_url: str | None = typer.Option(
-        None, help="PROMETHEUS_URL to bake into the observability server entry."
+        None,
+        help=(
+            "PROMETHEUS_URL to bake into the observability server entry. "
+            "Defaults to $PROMETHEUS_URL if set."
+        ),
     ),
     loki_url: str | None = typer.Option(
-        None, help="LOKI_URL to bake into the observability server entry."
+        None,
+        help=(
+            "LOKI_URL to bake into the observability server entry. "
+            "Defaults to $LOKI_URL if set."
+        ),
     ),
     kubeconfig: Path | None = typer.Option(
-        None, help="KUBECONFIG to use for the k8s-inspector server entry."
+        None,
+        help=(
+            "KUBECONFIG to use for the k8s-inspector server entry. "
+            "Defaults to $KUBECONFIG if set."
+        ),
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print the merged config, don't write."),
+    validate: bool = typer.Option(
+        False,
+        "--validate",
+        help=(
+            "Probe each backend before writing: SELECT 1 against POSTGRES_DSN, "
+            "GET /-/healthy on PROMETHEUS_URL, GET /ready on LOKI_URL. "
+            "Skips probes for env vars that aren't set."
+        ),
+    ),
 ) -> None:
-    """Wire every server into Claude Code's mcp.json (idempotent)."""
+    """Wire every server into Claude Code's mcp.json (idempotent).
+
+    Flag values fall back to the matching environment variable so the
+    common case ("I already exported these for the stdio smoke test") is
+    a single `devops-mcp install` with no flags. Pass an explicit flag to
+    override the env var for that one server.
+    """
     config = config.expanduser()
     existing = json.loads(config.read_text(encoding="utf-8")) if config.exists() else {}
     servers = existing.setdefault("mcpServers", {})
+
+    # Fall back to the env vars an operator likely already exported when
+    # running the stdio smoke test. The previous behaviour wrote `env: {}`
+    # for every server when called with no flags, leaving the user to
+    # hand-edit mcp.json. The flag still wins when both are present.
+    pgvector_dsn = pgvector_dsn or os.environ.get("POSTGRES_DSN") or None
+    prometheus_url = prometheus_url or os.environ.get("PROMETHEUS_URL") or None
+    loki_url = loki_url or os.environ.get("LOKI_URL") or None
+    if kubeconfig is None and os.environ.get("KUBECONFIG"):
+        kubeconfig = Path(os.environ["KUBECONFIG"])
 
     common_env: dict[str, str] = {}
     if pgvector_dsn:
@@ -151,6 +195,13 @@ def install(
         common_env["LOKI_URL"] = loki_url
     if kubeconfig:
         common_env["KUBECONFIG"] = str(kubeconfig.expanduser())
+
+    if validate:
+        _validate_backends(
+            pgvector_dsn=pgvector_dsn,
+            prometheus_url=prometheus_url,
+            loki_url=loki_url,
+        )
 
     for name, info in _SERVERS.items():
         servers[name] = {
@@ -171,6 +222,60 @@ def install(
     console.print(
         f"[green]wrote[/] {len(_SERVERS)} server entries to {config} (backup at {backup.name})"
     )
+
+
+def _validate_backends(
+    *,
+    pgvector_dsn: str | None,
+    prometheus_url: str | None,
+    loki_url: str | None,
+) -> None:
+    """Probe each configured backend; raise typer.Exit(1) on failure.
+
+    Prometheus exposes /-/healthy + /-/ready (200 = up); Loki exposes
+    /ready (200 = up). Postgres is probed with a `SELECT 1` via asyncpg
+    so we exercise the same driver the postgres-dba server uses.
+    Skips any backend whose URL/DSN was not provided — the install path
+    happily writes a partial mcp.json for users who only need a subset
+    of the servers.
+    """
+    failed: list[str] = []
+    if pgvector_dsn:
+
+        async def _probe_pg() -> None:
+            conn = await asyncpg.connect(pgvector_dsn, timeout=5)
+            try:
+                await conn.fetchval("SELECT 1")
+            finally:
+                await conn.close()
+
+        try:
+            anyio.run(_probe_pg)
+            console.print("[green]✓[/] postgres reachable")
+        except Exception as e:
+            failed.append(f"postgres: {e}")
+            console.print(f"[red]✗[/] postgres: {e}")
+
+    if prometheus_url:
+        try:
+            r = httpx.get(f"{prometheus_url.rstrip('/')}/-/healthy", timeout=5.0)
+            r.raise_for_status()
+            console.print("[green]✓[/] prometheus /-/healthy")
+        except Exception as e:
+            failed.append(f"prometheus: {e}")
+            console.print(f"[red]✗[/] prometheus: {e}")
+
+    if loki_url:
+        try:
+            r = httpx.get(f"{loki_url.rstrip('/')}/ready", timeout=5.0)
+            r.raise_for_status()
+            console.print("[green]✓[/] loki /ready")
+        except Exception as e:
+            failed.append(f"loki: {e}")
+            console.print(f"[red]✗[/] loki: {e}")
+
+    if failed:
+        raise typer.Exit(code=1)
 
 
 def _command_path(name: str) -> str:

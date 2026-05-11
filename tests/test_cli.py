@@ -203,6 +203,89 @@ class TestInstallDryRun:
         assert "postgres-dba" in body["mcpServers"]
 
 
+class TestInstallEnvFallback:
+    """`install` with no flags should fall back to the standard env vars.
+
+    Before this fallback the no-flag invocation wrote `env: {}` for
+    every server, leaving the user to hand-edit mcp.json — the
+    standalone-stdio smoke test exports the same vars, so picking them
+    up automatically removes a step.
+    """
+
+    def test_picks_up_env_vars_when_no_flags(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = tmp_path / "mcp.json"
+        kubeconfig = tmp_path / "kubeconfig"
+        monkeypatch.setenv("POSTGRES_DSN", "postgresql://envuser:envpw@h/db")
+        monkeypatch.setenv("PROMETHEUS_URL", "http://envprom:9090")
+        monkeypatch.setenv("LOKI_URL", "http://envloki:3100")
+        monkeypatch.setenv("KUBECONFIG", str(kubeconfig))
+
+        result = runner.invoke(app, ["install", "--config", str(config)])
+        assert result.exit_code == 0, result.output
+        body = json.loads(config.read_text(encoding="utf-8"))
+        servers = body["mcpServers"]
+        assert servers["postgres-dba"]["env"]["POSTGRES_DSN"] == "postgresql://envuser:envpw@h/db"
+        assert servers["observability"]["env"]["PROMETHEUS_URL"] == "http://envprom:9090"
+        assert servers["observability"]["env"]["LOKI_URL"] == "http://envloki:3100"
+        assert servers["k8s-inspector"]["env"]["KUBECONFIG"] == str(kubeconfig)
+
+    def test_explicit_flag_overrides_env_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = tmp_path / "mcp.json"
+        monkeypatch.setenv("POSTGRES_DSN", "postgresql://envuser:envpw@h/db")
+        result = runner.invoke(
+            app,
+            [
+                "install",
+                "--config",
+                str(config),
+                "--pgvector-dsn",
+                "postgresql://flaguser:flagpw@h/db",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        body = json.loads(config.read_text(encoding="utf-8"))
+        # Flag wins over env var.
+        assert (
+            body["mcpServers"]["postgres-dba"]["env"]["POSTGRES_DSN"]
+            == "postgresql://flaguser:flagpw@h/db"
+        )
+
+
+class TestInstallValidate:
+    """`--validate` probes each configured backend before writing mcp.json."""
+
+    def test_validate_skips_backends_with_no_url(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No env vars + no flags => nothing to probe => succeed silently.
+        for var in ("POSTGRES_DSN", "PROMETHEUS_URL", "LOKI_URL", "KUBECONFIG"):
+            monkeypatch.delenv(var, raising=False)
+        config = tmp_path / "mcp.json"
+        result = runner.invoke(app, ["install", "--config", str(config), "--validate"])
+        assert result.exit_code == 0, result.output
+        # Without any env, every server entry has env: {} — install still writes.
+        body = json.loads(config.read_text(encoding="utf-8"))
+        assert set(body["mcpServers"]) == {"postgres-dba", "k8s-inspector", "observability"}
+
+    def test_validate_fails_loud_when_backend_unreachable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Point at an obviously-unreachable URL — no port should be open
+        # on the loopback higher than 1.
+        for var in ("POSTGRES_DSN", "LOKI_URL", "KUBECONFIG"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("PROMETHEUS_URL", "http://127.0.0.1:1")
+        config = tmp_path / "mcp.json"
+        result = runner.invoke(app, ["install", "--config", str(config), "--validate"])
+        # Validate failure short-circuits before writing.
+        assert result.exit_code != 0
+        assert not config.exists()
+
+
 @pytest.mark.parametrize("cmd", ["version", "list-servers", "list-skills"])
 def test_help_for_each_subcommand(cmd: str) -> None:
     """Every subcommand should have --help that exits clean."""
