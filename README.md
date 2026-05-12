@@ -61,8 +61,9 @@ curl -fsSL https://raw.githubusercontent.com/BishBish123/devops-mcp-bundle/main/
 git clone https://github.com/BishBish123/devops-mcp-bundle
 cd devops-mcp-bundle && uv sync
 
-# or directly from git (no clone):
-uv pip install git+https://github.com/BishBish123/devops-mcp-bundle.git
+# or directly from git as a uv-managed tool (no clone, isolated venv,
+# console scripts on PATH):
+uv tool install git+https://github.com/BishBish123/devops-mcp-bundle.git
 ```
 
 PyPI publishing lands with v1.0; until then install from the git URL
