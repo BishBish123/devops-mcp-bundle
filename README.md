@@ -166,6 +166,34 @@ helpers in `observability.queries` are the supported way to compose
 LogQL with untrusted label values — they prevent matcher break-out
 attacks the same way `is_read_only_sql` prevents SQL injection.
 
+`render_logql` uses Python `str.format` syntax under the hood, which
+means **every literal LogQL brace has to be doubled**: `{{` for a
+literal `{`, `}}` for a literal `}`. Single braces are reserved for
+your placeholders. This is the easiest thing to get wrong — the error
+is a `str.format` IndexError that points at the template, not at
+the caller.
+
+```python
+from devops_mcp_bundle.observability.queries import render_logql
+
+# Correct: doubled braces around the label-matcher block.
+render_logql(
+    '{{app="{app}", container="{container}"}} |= "{needle}"',
+    app="api",
+    container="web",
+    needle='oh "no"',
+)
+# -> '{app="api", container="web"} |= "oh \\"no\\""'
+
+# Wrong: single braces — `app` and `container` get read as positional
+# placeholders and str.format raises IndexError.
+render_logql('{app="{app}"}', app="api")
+```
+
+The double-quote breakout in `needle` is escaped automatically; you
+never have to call `escape_logql_label` yourself when going through
+`render_logql`.
+
 ## Safety
 
 Every server is **read-only by construction**:

@@ -587,20 +587,42 @@ def escape_logql_label(value: str) -> str:
 
 
 def render_logql(template: str, **labels: str) -> str:
-    """Render a LogQL template, escaping every interpolated label value.
+    r"""Render a LogQL template, escaping every interpolated label value.
 
     Templates use ``{name}`` placeholders (Python `str.format` syntax).
     Every supplied value is run through :func:`escape_logql_label` before
     substitution, so callers can hand in untrusted values without having
     to remember to escape them.
 
+    LogQL itself uses literal ``{`` and ``}`` for label matchers — and
+    `str.format` reads single ``{`` / ``}`` as placeholder delimiters.
+    The two collide, so **every literal brace in the template must be
+    doubled**: ``{{`` for a literal ``{``, ``}}`` for a literal ``}``.
+    Forgetting this is the most common mistake; ``str.format`` raises
+    ``IndexError`` or ``KeyError`` and the message points at the
+    template, not the user's code.
+
     Label *keys* (the kwargs names) are validated against
     ``[a-zA-Z_][a-zA-Z0-9_]*`` so a caller can't sneak `}` or `=` into the
     key position and break out of the matcher. ``ValueError`` on invalid
     chars; valid key names match Prometheus/LogQL identifier rules.
 
-        >>> render_logql('{{app="{app}"}} |= "{needle}"', app="api", needle='oh "no"')
-        '{app="api"} |= "oh \\\\"no\\\\""'
+    Example — note the doubled braces around ``app`` and ``container``::
+
+        >>> render_logql(
+        ...     '{{app="{app}", container="{container}"}} |= "{needle}"',
+        ...     app="api",
+        ...     container="web",
+        ...     needle='oh "no"',
+        ... )
+        '{app="api", container="web"} |= "oh \\"no\\""'
+
+    Wrong (single braces) — produces an ``IndexError`` from
+    ``str.format`` because ``"app"`` and ``"container"`` get read as
+    positional placeholder names::
+
+        render_logql('{app="{app}"}', app="api")          # NO
+        render_logql('{{app="{app}"}}', app="api")        # YES
     """
     for key in labels:
         if not _LOGQL_LABEL_KEY_RE.match(key):
