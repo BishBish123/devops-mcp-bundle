@@ -143,15 +143,13 @@ def install(
     loki_url: str | None = typer.Option(
         None,
         help=(
-            "LOKI_URL to bake into the observability server entry. "
-            "Defaults to $LOKI_URL if set."
+            "LOKI_URL to bake into the observability server entry. Defaults to $LOKI_URL if set."
         ),
     ),
     kubeconfig: Path | None = typer.Option(
         None,
         help=(
-            "KUBECONFIG to use for the k8s-inspector server entry. "
-            "Defaults to $KUBECONFIG if set."
+            "KUBECONFIG to use for the k8s-inspector server entry. Defaults to $KUBECONFIG if set."
         ),
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print the merged config, don't write."),

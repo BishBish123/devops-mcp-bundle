@@ -621,8 +621,8 @@ def render_logql(template: str, **labels: str) -> str:
     ``str.format`` because ``"app"`` and ``"container"`` get read as
     positional placeholder names::
 
-        render_logql('{app="{app}"}', app="api")          # NO
-        render_logql('{{app="{app}"}}', app="api")        # YES
+        render_logql('{app="{app}"}', app="api")  # NO
+        render_logql('{{app="{app}"}}', app="api")  # YES
     """
     for key in labels:
         if not _LOGQL_LABEL_KEY_RE.match(key):
