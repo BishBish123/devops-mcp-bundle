@@ -194,9 +194,17 @@ to add the gate.
 ```bash
 make install             # uv sync --extra dev
 make test                # unit tests (no Docker)
-make test-integration    # integration tests (needs Postgres at POSTGRES_DSN)
+make test-integration    # integration tests (brings up local Postgres :5433)
+make smoke               # end-to-end import + classifier sanity, no DB / cluster / HTTP needed
 make check               # lint + typecheck
 ```
+
+`make smoke` is the fastest "did I break something obvious?" check —
+it imports every server, asserts the SQL safety classifier accepts
+`SELECT 1` and rejects `DROP TABLE`, exercises the LogQL escape
+helper, and runs the unit suite. It needs no Docker, no DB, and no
+network — useful in pre-push hooks and as the first step of any CI
+debugging session.
 
 Coverage today (run `pytest --collect-only -q` for the live count;
 the numbers below are from that command at the time of writing,
