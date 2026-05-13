@@ -42,7 +42,9 @@ test: ## Unit tests
 	$(UV) run pytest -m "not integration"
 
 .PHONY: test-integration
-test-integration: up ## Integration tests (brings up local Postgres via docker compose)
+test-integration: ## Integration tests (brings the stack up, always tears it down)
+	@trap 'docker compose down -v' EXIT INT TERM; \
+	docker compose up -d --wait && \
 	POSTGRES_DSN=$${POSTGRES_DSN:-postgresql://bench:bench@localhost:5433/bench} \
 		$(UV) run pytest -m integration
 
