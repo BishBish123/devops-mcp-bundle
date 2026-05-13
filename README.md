@@ -235,24 +235,22 @@ helper, and runs the unit suite. It needs no Docker, no DB, and no
 network — useful in pre-push hooks and as the first step of any CI
 debugging session.
 
-Coverage today (run `pytest --collect-only -q` for the live count;
-the numbers below are from that command at the time of writing,
-**306 tests total**):
+The bundle ships with a comprehensive test suite — run `make test`
+for the latest count. Roughly:
 
-- **108 unit tests** for the Postgres layer: 70 against the SQL safety
-  classifier (CTE injection, multi-statement, every mutating keyword,
-  side-effecting function denylist, blank/whitespace input), 21 in the
-  read-only-SQL classifier, 11 in `run_safe_query`, and 6 helper tests
-- **108 unit tests** for the K8s server using a mocked `CoreV1Api` /
-  `CustomObjectsApi` (24 helpers, 56 parsers, 28 queries)
-- **67 unit tests** for the observability server using
-  `httpx.MockTransport` — every PromQL result type, error envelopes,
-  duration parser, SLO burn-rate, LogQL render/escape (65 queries + 2
-  server smoke)
-- **11 unit tests** for the top-level `devops-mcp` CLI (version,
-  list-servers, list-skills, install --dry-run, idempotent merge)
-- **12 integration tests**: 11 against a real Postgres 16 service
-  container (round-trip, row caps, `SET LOCAL` timeouts, classifier-miss
+- Postgres layer: SQL safety classifier (CTE injection, multi-statement,
+  mutating keywords, side-effecting function denylist, blank input),
+  read-only-SQL classifier, `run_safe_query`, plus helper tests
+- K8s server unit tests using mocked `CoreV1Api` / `CustomObjectsApi`
+  (helpers, parsers, queries)
+- Observability server unit tests using `httpx.MockTransport` —
+  every PromQL result type, error envelopes, duration parser, SLO
+  burn-rate, LogQL render/escape
+- CLI tests for the top-level `devops-mcp` command (version,
+  list-servers, list-skills, install --dry-run, idempotent merge,
+  `--validate` advisory + `--strict-validate` hard-fail)
+- Integration tests against a real Postgres 16 service container
+  (round-trip, row caps, `SET LOCAL` timeouts, classifier-miss
   rejection), plus a wheel-build assertion that `SKILL.md` files ship
 
 ## Layout
