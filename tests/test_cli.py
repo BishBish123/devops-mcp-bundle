@@ -271,19 +271,43 @@ class TestInstallValidate:
         body = json.loads(config.read_text(encoding="utf-8"))
         assert set(body["mcpServers"]) == {"postgres-dba", "k8s-inspector", "observability"}
 
-    def test_validate_fails_loud_when_backend_unreachable(
+    def test_install_validate_writes_config_when_one_backend_unreachable(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Point at an obviously-unreachable URL — no port should be open
-        # on the loopback higher than 1.
+        # `--validate` is advisory by default — an unreachable backend is
+        # surfaced in the status table but the install still writes
+        # mcp.json, so users can finish wiring before the backend exists.
         for var in ("POSTGRES_DSN", "LOKI_URL", "KUBECONFIG"):
             monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("PROMETHEUS_URL", "http://127.0.0.1:1")
         config = tmp_path / "mcp.json"
         result = runner.invoke(app, ["install", "--config", str(config), "--validate"])
-        # Validate failure short-circuits before writing.
+        assert result.exit_code == 0, result.output
+        assert config.exists()
+        assert "unreachable" in result.output
+        assert "install completed" in result.output
+        body = json.loads(config.read_text(encoding="utf-8"))
+        # Config still gets written for every server.
+        assert set(body["mcpServers"]) == {"postgres-dba", "k8s-inspector", "observability"}
+
+    def test_install_strict_validate_exits_nonzero_on_unreachable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Pair `--validate` with `--strict-validate` to get the old
+        # hard-fail behaviour. The config still gets written first so
+        # the user can recover by simply starting the backend; only the
+        # exit code signals the failure to scripts/CI.
+        for var in ("POSTGRES_DSN", "LOKI_URL", "KUBECONFIG"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("PROMETHEUS_URL", "http://127.0.0.1:1")
+        config = tmp_path / "mcp.json"
+        result = runner.invoke(
+            app,
+            ["install", "--config", str(config), "--validate", "--strict-validate"],
+        )
         assert result.exit_code != 0
-        assert not config.exists()
+        # Config is still written — strict only changes the exit code.
+        assert config.exists()
 
 
 @pytest.mark.parametrize("cmd", ["version", "list-servers", "list-skills"])

@@ -159,7 +159,19 @@ def install(
         help=(
             "Probe each backend before writing: SELECT 1 against POSTGRES_DSN, "
             "GET /-/healthy on PROMETHEUS_URL, GET /ready on LOKI_URL. "
-            "Skips probes for env vars that aren't set."
+            "Skips probes for env vars that aren't set. Unreachable backends "
+            "are reported but do not block the install — pair with "
+            "--strict-validate to fail loudly instead."
+        ),
+    ),
+    strict_validate: bool = typer.Option(
+        False,
+        "--strict-validate",
+        help=(
+            "When combined with --validate, exit non-zero if any probed "
+            "backend is unreachable. Without this flag --validate is "
+            "advisory: the config still gets written so the install can "
+            "complete before the backend comes up."
         ),
     ),
 ) -> None:
@@ -194,12 +206,14 @@ def install(
     if kubeconfig:
         common_env["KUBECONFIG"] = str(kubeconfig.expanduser())
 
+    validation_results: list[tuple[str, str, bool, str | None]] = []
     if validate:
-        _validate_backends(
+        validation_results = _validate_backends(
             pgvector_dsn=pgvector_dsn,
             prometheus_url=prometheus_url,
             loki_url=loki_url,
         )
+        _print_validation_table(validation_results)
 
     for name, info in _SERVERS.items():
         servers[name] = {
@@ -221,23 +235,31 @@ def install(
         f"[green]wrote[/] {len(_SERVERS)} server entries to {config} (backup at {backup.name})"
     )
 
+    if validate and validation_results:
+        _print_validation_summary(validation_results)
+        unreachable = [r for r in validation_results if r[2] is False]
+        if unreachable and strict_validate:
+            raise typer.Exit(code=1)
+
 
 def _validate_backends(
     *,
     pgvector_dsn: str | None,
     prometheus_url: str | None,
     loki_url: str | None,
-) -> None:
-    """Probe each configured backend; raise typer.Exit(1) on failure.
+) -> list[tuple[str, str, bool, str | None]]:
+    """Probe each configured backend; return per-backend status tuples.
+
+    Each tuple is ``(name, target, reachable, error)`` — ``error`` is
+    ``None`` when ``reachable`` is True. Backends whose URL/DSN was not
+    provided are not included; callers print a status table and decide
+    whether to treat unreachable as fatal (see ``--strict-validate``).
 
     Prometheus exposes /-/healthy + /-/ready (200 = up); Loki exposes
     /ready (200 = up). Postgres is probed with a `SELECT 1` via asyncpg
     so we exercise the same driver the postgres-dba server uses.
-    Skips any backend whose URL/DSN was not provided — the install path
-    happily writes a partial mcp.json for users who only need a subset
-    of the servers.
     """
-    failed: list[str] = []
+    results: list[tuple[str, str, bool, str | None]] = []
     if pgvector_dsn:
 
         async def _probe_pg() -> None:
@@ -249,31 +271,58 @@ def _validate_backends(
 
         try:
             anyio.run(_probe_pg)
-            console.print("[green]✓[/] postgres reachable")
+            results.append(("postgres", pgvector_dsn, True, None))
         except Exception as e:
-            failed.append(f"postgres: {e}")
-            console.print(f"[red]✗[/] postgres: {e}")
+            results.append(("postgres", pgvector_dsn, False, str(e)))
 
     if prometheus_url:
         try:
             r = httpx.get(f"{prometheus_url.rstrip('/')}/-/healthy", timeout=5.0)
             r.raise_for_status()
-            console.print("[green]✓[/] prometheus /-/healthy")
+            results.append(("prometheus", prometheus_url, True, None))
         except Exception as e:
-            failed.append(f"prometheus: {e}")
-            console.print(f"[red]✗[/] prometheus: {e}")
+            results.append(("prometheus", prometheus_url, False, str(e)))
 
     if loki_url:
         try:
             r = httpx.get(f"{loki_url.rstrip('/')}/ready", timeout=5.0)
             r.raise_for_status()
-            console.print("[green]✓[/] loki /ready")
+            results.append(("loki", loki_url, True, None))
         except Exception as e:
-            failed.append(f"loki: {e}")
-            console.print(f"[red]✗[/] loki: {e}")
+            results.append(("loki", loki_url, False, str(e)))
 
-    if failed:
-        raise typer.Exit(code=1)
+    return results
+
+
+def _print_validation_table(results: list[tuple[str, str, bool, str | None]]) -> None:
+    """Render the per-backend status table seen above the install summary."""
+    if not results:
+        return
+    table = Table(title="Backend validation")
+    table.add_column("Backend", style="bold")
+    table.add_column("Target")
+    table.add_column("Status")
+    table.add_column("Error")
+    for name, target, reachable, error in results:
+        status = "[green]reachable[/]" if reachable else "[red]unreachable[/]"
+        table.add_row(name, target, status, error or "")
+    console.print(table)
+
+
+def _print_validation_summary(results: list[tuple[str, str, bool, str | None]]) -> None:
+    """Print the one-line summary that follows the install confirmation."""
+    if not results:
+        return
+    reachable = [r for r in results if r[2]]
+    unreachable = [r for r in results if not r[2]]
+    detail = ""
+    if unreachable:
+        bits = [f"{name} at {target}" for name, target, _, _ in unreachable]
+        detail = f" (unreachable: {', '.join(bits)} — start them before running tools)"
+    console.print(
+        f"validation: {len(reachable)}/{len(results)} backends reachable; "
+        f"install completed{detail}."
+    )
 
 
 def _command_path(name: str) -> str:
