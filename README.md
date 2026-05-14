@@ -170,8 +170,8 @@ attacks the same way `is_read_only_sql` prevents SQL injection.
 means **every literal LogQL brace has to be doubled**: `{{` for a
 literal `{`, `}}` for a literal `}`. Single braces are reserved for
 your placeholders. This is the easiest thing to get wrong — the error
-is a `str.format` IndexError that points at the template, not at
-the caller.
+is a `str.format` `ValueError: unexpected '{' in field name` that
+points at the template, not at the caller.
 
 ```python
 from devops_mcp_bundle.observability.queries import render_logql
@@ -185,8 +185,9 @@ render_logql(
 )
 # -> '{app="api", container="web"} |= "oh \\"no\\""'
 
-# Wrong: single braces — `app` and `container` get read as positional
-# placeholders and str.format raises IndexError.
+# Wrong: single braces — the literal `{` is read as the start of a
+# nested placeholder name and str.format raises
+# `ValueError: unexpected '{' in field name`.
 render_logql('{app="{app}"}', app="api")
 ```
 

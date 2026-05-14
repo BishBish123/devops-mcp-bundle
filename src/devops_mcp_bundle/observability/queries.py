@@ -599,8 +599,9 @@ def render_logql(template: str, **labels: str) -> str:
     The two collide, so **every literal brace in the template must be
     doubled**: ``{{`` for a literal ``{``, ``}}`` for a literal ``}``.
     Forgetting this is the most common mistake; ``str.format`` raises
-    ``IndexError`` or ``KeyError`` and the message points at the
-    template, not the user's code.
+    ``ValueError: unexpected '{' in field name`` (or a ``KeyError`` for
+    unbalanced ``}}``) and the message points at the template, not the
+    user's code.
 
     Label *keys* (the kwargs names) are validated against
     ``[a-zA-Z_][a-zA-Z0-9_]*`` so a caller can't sneak `}` or `=` into the
@@ -617,9 +618,9 @@ def render_logql(template: str, **labels: str) -> str:
         ... )
         '{app="api", container="web"} |= "oh \\"no\\""'
 
-    Wrong (single braces) — produces an ``IndexError`` from
-    ``str.format`` because ``"app"`` and ``"container"`` get read as
-    positional placeholder names::
+    Wrong (single braces) — produces ``ValueError: unexpected '{' in
+    field name`` from ``str.format`` because the literal ``{`` is
+    read as the start of a nested placeholder name::
 
         render_logql('{app="{app}"}', app="api")  # NO
         render_logql('{{app="{app}"}}', app="api")  # YES
