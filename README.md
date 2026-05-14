@@ -309,8 +309,9 @@ service container that the local hook can't spin up).
   notification is fire-and-forget by design, so the error is harmless:
   the server is up, every subsequent `tools/list` and `tools/call`
   works as documented. Ignore the spurious error in client logs. Stdio
-  transport is unaffected. Tracking upstream; nothing to do on this
-  side.
+  transport is unaffected. Affects FastMCP 3.x (current pin in
+  `pyproject.toml` is `fastmcp>=2.0`; the deployed venv resolves to
+  3.x today). Upstream issue: TBD — see FastMCP changelog.
 
 ## License
 
