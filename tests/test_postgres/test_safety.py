@@ -211,6 +211,57 @@ class TestSideEffectingFunctionDenylist:
         assert c.is_read_only is False
         assert "dblink_exec" in c.reason
 
+    def test_classifier_rejects_dblink_send_query(self) -> None:
+        # The async dblink path was the original bypass: the SELECT shape
+        # passes the leading-keyword check, and the remote DB executes
+        # whatever SQL is in the second argument regardless of our local
+        # `default_transaction_read_only` flag. Cover it explicitly.
+        c = classify_sql(
+            "SELECT dblink_send_query('conn', 'INSERT INTO t VALUES (1)')"
+        )
+        assert c.is_read_only is False
+        assert "dblink_send_query" in c.reason
+
+    def test_classifier_rejects_dblink_get_result(self) -> None:
+        c = classify_sql("SELECT dblink_get_result('conn')")
+        assert c.is_read_only is False
+        assert "dblink_get_result" in c.reason
+
+    def test_classifier_rejects_dblink_cancel_query(self) -> None:
+        c = classify_sql("SELECT dblink_cancel_query('conn')")
+        assert c.is_read_only is False
+        assert "dblink_cancel_query" in c.reason
+
+    def test_classifier_rejects_dblink_open(self) -> None:
+        c = classify_sql("SELECT dblink_open('cur', 'SELECT 1')")
+        assert c.is_read_only is False
+        assert "dblink_open" in c.reason
+
+    def test_classifier_rejects_dblink_close(self) -> None:
+        c = classify_sql("SELECT dblink_close('cur')")
+        assert c.is_read_only is False
+        assert "dblink_close" in c.reason
+
+    def test_classifier_rejects_dblink_fetch(self) -> None:
+        c = classify_sql("SELECT * FROM dblink_fetch('cur', 5) AS t(id int)")
+        assert c.is_read_only is False
+        assert "dblink_fetch" in c.reason
+
+    def test_classifier_rejects_dblink_disconnect(self) -> None:
+        c = classify_sql("SELECT dblink_disconnect('conn')")
+        assert c.is_read_only is False
+        assert "dblink_disconnect" in c.reason
+
+    def test_classifier_rejects_dblink_get_pkey(self) -> None:
+        c = classify_sql("SELECT * FROM dblink_get_pkey('public.t')")
+        assert c.is_read_only is False
+        assert "dblink_get_pkey" in c.reason
+
+    def test_classifier_rejects_dblink_get_connections(self) -> None:
+        c = classify_sql("SELECT dblink_get_connections()")
+        assert c.is_read_only is False
+        assert "dblink_get_connections" in c.reason
+
     def test_classifier_rejects_nextval(self) -> None:
         c = classify_sql("SELECT nextval('my_seq')")
         assert c.is_read_only is False

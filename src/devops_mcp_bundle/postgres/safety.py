@@ -114,9 +114,31 @@ _SIDE_EFFECTING_FUNCTIONS: frozenset[str] = frozenset(
         "pg_stop_backup",
         "pg_backup_start",
         "pg_backup_stop",
-        # dblink can mutate a remote DB the local read-only flag can't see
+        # dblink contrib module — anything that takes SQL or controls a
+        # remote connection bypasses the local read-only flag. The remote
+        # database has no idea about our local `default_transaction_read_only`
+        # setting, so a `SELECT dblink_send_query('conn', 'INSERT ...')`
+        # would otherwise sail through the leading-keyword check and the
+        # remote DB would happily execute the INSERT. Cover the full
+        # contrib surface — synchronous (`dblink_exec`/`dblink`),
+        # asynchronous (`dblink_send_query`/`dblink_get_result`/
+        # `dblink_cancel_query`), connection lifecycle (`dblink_open`/
+        # `dblink_close`/`dblink_disconnect`), result fetching
+        # (`dblink_fetch`), and the inspection helpers
+        # (`dblink_get_pkey`/`dblink_get_connections`) which are less
+        # dangerous on their own but enable hostile-DB-side-channel work
+        # against any reachable foreign server.
         "dblink_exec",
         "dblink",
+        "dblink_send_query",
+        "dblink_get_result",
+        "dblink_cancel_query",
+        "dblink_open",
+        "dblink_close",
+        "dblink_fetch",
+        "dblink_disconnect",
+        "dblink_get_pkey",
+        "dblink_get_connections",
         # Large object mutators
         "lo_create",
         "lo_unlink",
