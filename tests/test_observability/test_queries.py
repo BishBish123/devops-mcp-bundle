@@ -481,9 +481,12 @@ class TestPromTargets:
         async with _client_with(lambda req: httpx.Response(200, json=body)) as c:
             with pytest.raises(ValueError, match="exceeds cap"):
                 await queries.prom_targets(c, PROM)
-            # With an explicit limit the same payload truncates cleanly.
+            # With an explicit limit the same payload truncates and appends a
+            # sentinel entry, so len == limit + 1 when truncation occurred.
             truncated = await queries.prom_targets(c, PROM, limit=10)
-        assert len(truncated) == 10
+        assert len(truncated) == 11  # 10 real + 1 sentinel
+        assert truncated[-1].job == "__truncated__"
+        assert truncated[-1].truncated is True
 
     async def test_prom_targets_rejects_non_positive_limit(self) -> None:
         async with _client_with(lambda req: httpx.Response(200)) as c:
@@ -783,3 +786,101 @@ class TestRequestParams:
             await queries.loki_query(c, LOKI, '{app="api"}')
         assert captured[0].url.path.endswith("/loki/api/v1/query_range")
         assert captured[0].url.params["direction"] == "backward"
+
+
+# ---------------------------------------------------------------------------
+# FIX 2 — prom_range series-count guard + prom_targets truncation sentinel
+# ---------------------------------------------------------------------------
+
+
+class TestPromRangeSeriesGuard:
+    async def test_prom_range_rejects_oversized_series_count(self) -> None:
+        # A high-cardinality matrix query can return thousands of series even
+        # after the sample-count check passes. Refuse rather than flood context.
+        oversized = {
+            "status": "success",
+            "data": {
+                "resultType": "matrix",
+                "result": [
+                    {
+                        "metric": {"job": f"j{i}"},
+                        "values": [[1700000000.0, "1"]],
+                    }
+                    for i in range(queries.MAX_PROM_SERIES_RANGE + 1)
+                ],
+            },
+        }
+        async with _client_with(lambda req: httpx.Response(200, json=oversized)) as c:
+            with pytest.raises(ValueError, match="exceeds cap"):
+                await queries.prom_range(
+                    c, PROM, "up", "1700000000", "1700003600", step="30s"
+                )
+
+    async def test_prom_range_allows_result_at_cap(self) -> None:
+        # Exactly at the cap is fine — the check is strict-greater.
+        body = {
+            "status": "success",
+            "data": {
+                "resultType": "matrix",
+                "result": [
+                    {
+                        "metric": {"job": f"j{i}"},
+                        "values": [[1700000000.0, "1"]],
+                    }
+                    for i in range(queries.MAX_PROM_SERIES_RANGE)
+                ],
+            },
+        }
+        async with _client_with(lambda req: httpx.Response(200, json=body)) as c:
+            series = await queries.prom_range(
+                c, PROM, "up", "1700000000", "1700003600", step="30s"
+            )
+        assert len(series) == queries.MAX_PROM_SERIES_RANGE
+
+
+class TestPromTargetsSentinel:
+    async def test_truncation_sentinel_appended_when_limit_exceeds_result(self) -> None:
+        # limit=2 on a 5-item result: should return 2 real entries + 1 sentinel.
+        body = {
+            "status": "success",
+            "data": {
+                "activeTargets": [
+                    {
+                        "labels": {"job": f"job{i}", "instance": f"10.0.0.{i}:9090"},
+                        "health": "up",
+                        "lastScrape": "2026-04-29T03:00:00Z",
+                        "lastError": "",
+                    }
+                    for i in range(5)
+                ],
+            },
+        }
+        async with _client_with(lambda req: httpx.Response(200, json=body)) as c:
+            targets = await queries.prom_targets(c, PROM, limit=2)
+        assert len(targets) == 3
+        sentinel = targets[-1]
+        assert sentinel.job == "__truncated__"
+        assert sentinel.health == "unknown"
+        assert sentinel.truncated is True
+        assert sentinel.total == 5
+
+    async def test_no_sentinel_when_result_fits_within_limit(self) -> None:
+        # limit=10 on a 3-item result: all entries returned, no sentinel.
+        body = {
+            "status": "success",
+            "data": {
+                "activeTargets": [
+                    {
+                        "labels": {"job": f"job{i}", "instance": f"10.0.0.{i}:9090"},
+                        "health": "up",
+                        "lastScrape": "2026-04-29T03:00:00Z",
+                        "lastError": "",
+                    }
+                    for i in range(3)
+                ],
+            },
+        }
+        async with _client_with(lambda req: httpx.Response(200, json=body)) as c:
+            targets = await queries.prom_targets(c, PROM, limit=10)
+        assert len(targets) == 3
+        assert all(t.truncated is False for t in targets)

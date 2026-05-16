@@ -50,6 +50,12 @@ MAX_RANGE_SAMPLES = 10_000
 # caller learns to tighten the selector.
 MAX_PROM_SERIES = 5_000
 
+# Outer bound for the *result* series count returned by `prom_range`. A
+# high-cardinality matrix query can return thousands of series even after
+# the sample-count and window checks pass (each series gets its own row).
+# Refuse rather than silently return a context-flooding result.
+MAX_PROM_SERIES_RANGE = 5_000
+
 # Outer bound for `prom_targets`. A large cluster running kubernetes-pods
 # service-discovery can have tens of thousands of dropped targets after
 # relabel rules kick in. The unbounded result was the same context-window
@@ -152,7 +158,13 @@ async def prom_range(
         params={"query": promql, "start": start, "end": end, "step": step},
     )
     body = _check(resp, "prom_range")
-    return _parse_prom_data(body["data"])
+    data = body["data"]
+    if len(data.get("result", [])) > MAX_PROM_SERIES_RANGE:
+        raise ValueError(
+            f"prom_range returned {len(data['result'])} series, exceeds cap "
+            f"{MAX_PROM_SERIES_RANGE}; tighten the query"
+        )
+    return _parse_prom_data(data)
 
 
 async def prom_targets(
@@ -229,7 +241,24 @@ async def prom_targets(
                 f"{MAX_PROM_TARGETS}; pass an explicit `limit` or filter by state"
             )
         return out
-    return out[: min(limit, MAX_PROM_TARGETS)]
+    effective = min(limit, MAX_PROM_TARGETS)
+    orig_count = len(out)
+    result = out[:effective]
+    if orig_count > effective:
+        result.append(
+            Target(
+                job="__truncated__",
+                instance="",
+                health="unknown",
+                last_scrape=None,
+                last_error=None,
+                scrape_pool=None,
+                origin="active",
+                truncated=True,
+                total=orig_count,
+            )
+        )
+    return result
 
 
 async def prom_alerts(client: httpx.AsyncClient, prom_url: str) -> list[Alert]:

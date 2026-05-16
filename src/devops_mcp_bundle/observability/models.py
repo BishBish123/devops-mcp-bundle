@@ -61,6 +61,11 @@ class Target(BaseModel):
     that came from `droppedTargets`. `origin` tells the caller which
     bucket the entry was in — relevant when `state="any"` returns the
     union of both lists.
+
+    When a `limit` is passed to `prom_targets` and the result is
+    truncated, a sentinel entry is appended with ``job="__truncated__"``,
+    ``truncated=True``, and ``total`` set to the original count before
+    truncation. This lets callers detect that more entries exist.
     """
 
     job: str
@@ -70,6 +75,8 @@ class Target(BaseModel):
     last_error: str | None
     scrape_pool: str | None = None
     origin: str = "active"  # "active" | "dropped"
+    truncated: bool = Field(default=False, description="True only on the sentinel entry appended when results are truncated.")
+    total: int | None = Field(default=None, description="Original result count before truncation (set on the sentinel entry only).")
 
 
 class BurnRateWindow(BaseModel):
