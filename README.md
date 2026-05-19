@@ -61,9 +61,10 @@ curl -fsSL https://raw.githubusercontent.com/BishBish123/devops-mcp-bundle/main/
 # Pin a specific tag, branch, or commit (e.g. once v0.2.0 is released):
 INSTALL_REF=v0.2.0 bash <(curl -fsSL https://raw.githubusercontent.com/BishBish123/devops-mcp-bundle/main/install.sh)
 
-# or, manually from a checkout:
+# or, manually from a checkout (use `uv sync --extra dev` if you want
+# to run the test suite — plain `uv sync` skips pytest/ruff/mypy):
 git clone https://github.com/BishBish123/devops-mcp-bundle
-cd devops-mcp-bundle && uv sync
+cd devops-mcp-bundle && uv sync --extra dev
 
 # or directly from git as a uv-managed tool (no clone, isolated venv,
 # console scripts on PATH):

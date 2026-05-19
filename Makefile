@@ -38,7 +38,8 @@ check: lint typecheck ## Lint + typecheck
 
 # ---- tests ---------------------------------------------------------------
 .PHONY: test
-test: ## Unit tests
+test: ## Unit tests (auto-installs dev deps so a fresh `uv sync` clone still works)
+	$(UV) sync --extra dev --quiet
 	$(UV) run pytest -m "not integration"
 
 .PHONY: test-integration
