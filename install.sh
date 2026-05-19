@@ -17,11 +17,18 @@ set -euo pipefail
 # or a local checkout.
 
 VENV="${HOME}/.local/share/devops-mcp-bundle"
-# Default to the pinned stable release.  Override INSTALL_REF to install a
-# different tag, branch, or commit:
-#   INSTALL_REF=main bash install.sh         # latest (bleeding-edge)
+# Default to `main` until a release tag is published to the GitHub
+# remote. The `v0.1.0` tag was promoted on the local checkout but the
+# push of that tag to origin is part of the v0.1 release checklist
+# (see CONTRIBUTING.md / release notes); piping this script while the
+# tag is unpublished previously crashed with `pathspec 'v0.1.0' did
+# not match`. Once a tag is pushed, point releases can flip the
+# default by editing this line.
+#
+# Override INSTALL_REF to pin a specific tag, branch, or commit:
+#   INSTALL_REF=main bash install.sh         # explicit (default)
 #   INSTALL_REF=v0.2.0 bash install.sh       # a future release
-INSTALL_REF="${INSTALL_REF:-v0.1.0}"
+INSTALL_REF="${INSTALL_REF:-main}"
 PIP_SOURCE="${PIP_SOURCE:-git+https://github.com/BishBish123/devops-mcp-bundle.git@${INSTALL_REF}}"
 # Allow callers to point us at a specific interpreter — Homebrew's
 # `python3` is 3.13 today, and macOS still ships 3.9 as the system
@@ -77,6 +84,13 @@ bold "installing devops-mcp-bundle from $PIP_SOURCE"
 # shebang; catching that here is cheaper than a confused user later.
 if ! "$VENV/bin/devops-mcp" version >/dev/null 2>&1; then
     die "post-install smoke check failed: $VENV/bin/devops-mcp version did not run cleanly"
+fi
+# Best-effort feature smoke: warn (don't fail) if the installed CLI
+# doesn't expose --validate. The flag was added in main but missing
+# from older tags; if a user pinned an INSTALL_REF that predates it
+# we want them to know rather than silently get a stale install.
+if ! "$VENV/bin/devops-mcp" install --help 2>/dev/null | grep -q -- "--validate"; then
+    warn "installed bundle does not expose 'devops-mcp install --validate' — your INSTALL_REF (${INSTALL_REF}) may predate that feature; INSTALL_REF=main pulls the latest."
 fi
 ok "devops-mcp-bundle installed"
 
